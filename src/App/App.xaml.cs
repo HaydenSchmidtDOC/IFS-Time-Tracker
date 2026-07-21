@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Threading;
 using Microsoft.Win32;
 using TimeTracker.App.Interop;
@@ -13,6 +14,7 @@ namespace TimeTracker.App;
 public partial class App : Application
 {
     private Mutex? _instanceMutex;
+    private bool _ownsInstanceMutex;
 
     public AppPaths Paths { get; private set; } = null!;
     public JsonStore Store { get; private set; } = null!;
@@ -47,9 +49,14 @@ public partial class App : Application
         base.OnStartup(e);
 
         _instanceMutex = new Mutex(true, "TimeTracker.SingleInstance", out bool isNew);
+        _ownsInstanceMutex = isNew;
+        // When another instance already holds the mutex, .NET does NOT grant this thread
+        // ownership even though initiallyOwned:true was requested — ReleaseMutex() must not
+        // be called on it later (OnExit), or it throws on this duplicate-launch path.
         if (!isNew) { Shutdown(); return; }
 
         ApplyTheme();
+        ApplySystemAccent();
 
         Paths = new AppPaths();
         Store = new JsonStore(Paths);
@@ -105,6 +112,23 @@ public partial class App : Application
             Source = new Uri($"Themes/{(light ? "Light" : "Dark")}.xaml", UriKind.Relative)
         };
         Resources.MergedDictionaries.Insert(0, dict);
+    }
+
+    /// <summary>
+    /// Override the theme's static Accent/AccentInk with the user's actual Windows accent
+    /// colour, if readable. Every "blue highlight" in the app (save buttons, the selected-
+    /// project border, pill toggle hover) is a DynamicResource lookup on these two keys, so
+    /// adding a dictionary on top of the theme is enough to re-skin all of them at once.
+    /// </summary>
+    private void ApplySystemAccent()
+    {
+        if (!SystemAccent.TryGetAccentColor(out var accent)) return;
+        var ink = SystemAccent.ReadableInk(accent);
+        Resources.MergedDictionaries.Add(new ResourceDictionary
+        {
+            { "Accent", new SolidColorBrush(accent) },
+            { "AccentInk", new SolidColorBrush(ink) },
+        });
     }
 
     // ---------------- tray ----------------
@@ -237,7 +261,7 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
-        _instanceMutex?.ReleaseMutex();
+        if (_ownsInstanceMutex) _instanceMutex?.ReleaseMutex();
         _instanceMutex?.Dispose();
         base.OnExit(e);
     }

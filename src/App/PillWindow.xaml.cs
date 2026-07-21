@@ -3,25 +3,33 @@ using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
-using System.Windows.Media.Animation;
 using TimeTracker.App.UI;
 
 namespace TimeTracker.App;
 
 public partial class PillWindow : Window
 {
-    private const double ExpandedWidth = 216;
-    private const double CollapsedWidth = 60;
-    private const double EdgeMargin = 14;  // resting gap from the screen edge
+    private const double ExpandedWidth = 248;
+    private const double CollapsedWidth = 76;
+    private const double EdgeMargin = 14;   // resting gap from the screen edge
     private const double SnapZone = 90;     // how near an edge triggers a corner/edge snap
+    private const double FrictionPerFrame = 0.90; // velocity multiplier per ~16ms frame
 
     [StructLayout(LayoutKind.Sequential)] private struct POINT { public int X; public int Y; }
     [DllImport("user32.dll")] private static extern bool GetCursorPos(out POINT p);
 
     private bool _dragging, _moved, _collapsed;
     private Point _cursorStart, _winStart;
-    private Point _lastPos; private double _lastTime; private double _vx, _vy;
+    private Point _lastPos; private double _lastTimeMs; private double _vx, _vy; // px/ms
     private readonly Stopwatch _clock = Stopwatch.StartNew();
+
+    // ---- single manual per-frame animator (WPF's BeginAnimation on Window.Left/Top does not
+    // reliably move the underlying OS window, so position is driven imperatively every frame) ----
+    private enum AnimMode { None, Glide, Tween }
+    private AnimMode _anim = AnimMode.None;
+    private double _frameTimeMs;
+    private double _tFromL, _tFromT, _tFromW, _tToL, _tToT, _tToW, _tElapsedMs, _tDurationMs;
+    private Action? _tweenDone;
 
     private static App A => App.Current;
 
@@ -59,7 +67,7 @@ public partial class PillWindow : Window
 
         Dot.Fill = show is not null ? ColorUtil.Brush(show.Color) : (Brush)FindResource("TextFaint");
         Dot.Opacity = running ? 1.0 : 0.5;
-        CodeText.Text = show?.Code ?? "Not tracking";
+        CodeText.Text = show?.Code ?? "Idle";
         ToggleBtn.Content = running ? "■" : "▶";
         ToggleBtn.ToolTip = running ? "Stop" : $"Start {show?.Code ?? "project"}";
         UpdateTime();
@@ -83,34 +91,33 @@ public partial class PillWindow : Window
     {
         _collapsed = collapsed;
         Body.Visibility = collapsed ? Visibility.Collapsed : Visibility.Visible;
-        Grip.Visibility = collapsed ? Visibility.Collapsed : Visibility.Visible;
 
         double targetW = collapsed ? CollapsedWidth : ExpandedWidth;
         var wa = WorkArea();
-        // Keep the same screen edge fixed while resizing, and stay on-screen.
+        // Keep the same screen edge fixed while resizing, and stay fully on-screen either way.
         bool rightSide = (Left + Width / 2) > (wa.Left + wa.Width / 2);
         double targetLeft = rightSide ? (Left + Width - targetW) : Left;
         targetLeft = Clamp(targetLeft, wa.Left + EdgeMargin, wa.Right - targetW - EdgeMargin);
+        double targetTop = Clamp(Top, wa.Top + EdgeMargin, wa.Bottom - Height - EdgeMargin);
 
-        Animate(WidthProperty, targetW, 240);
-        Animate(LeftProperty, targetLeft, 240);
+        StartTween(targetLeft, targetTop, targetW, 240, () => A.Tracker.SavePillPosition(Left, Top));
     }
 
     private void Pill_RightClick(object sender, MouseButtonEventArgs e) => A.ShowMainWindow();
 
-    // ---------------- drag + momentum ----------------
+    // ---------------- drag ----------------
 
     private void Pill_Down(object sender, MouseButtonEventArgs e)
     {
         if (ReferenceEquals(e.OriginalSource, Dot) || ToggleBtn.IsMouseOver) return;
 
-        if (e.ClickCount == 2) { A.ShowMainWindow(); return; }  // double-click opens the app
+        if (e.ClickCount == 2) { A.ShowMainWindow(); return; } // double-click opens the app
 
-        StopAnimations();
+        StopAnim();
         _dragging = true; _moved = false;
         _cursorStart = CursorDip();
         _winStart = new Point(Left, Top);
-        _lastPos = _cursorStart; _lastTime = _clock.Elapsed.TotalMilliseconds; _vx = _vy = 0;
+        _lastPos = _cursorStart; _lastTimeMs = _clock.Elapsed.TotalMilliseconds; _vx = _vy = 0;
         Pill.CaptureMouse();
     }
 
@@ -119,10 +126,10 @@ public partial class PillWindow : Window
         if (!_dragging) return;
         var c = CursorDip();
         double now = _clock.Elapsed.TotalMilliseconds;
-        double dt = Math.Max(1, now - _lastTime);
+        double dt = Math.Max(1, now - _lastTimeMs);
         _vx = (c.X - _lastPos.X) / dt;   // px per ms
         _vy = (c.Y - _lastPos.Y) / dt;
-        _lastPos = c; _lastTime = now;
+        _lastPos = c; _lastTimeMs = now;
 
         var wa = WorkArea();
         double nl = Clamp(_winStart.X + (c.X - _cursorStart.X), wa.Left, wa.Right - Width);
@@ -136,58 +143,112 @@ public partial class PillWindow : Window
         if (!_dragging) return;
         _dragging = false;
         Pill.ReleaseMouseCapture();
-        if (_moved) Settle();
+        if (_moved) StartGlide();
+        else A.Tracker.SavePillPosition(Left, Top);
     }
 
-    /// <summary>
-    /// One smooth eased motion from the release point to a tidy margin: projects a short
-    /// glide from the fling velocity, then snaps to the nearest edge/corner if close — so it
-    /// drifts to a stop instead of slamming the edge and bouncing back.
-    /// </summary>
-    private void Settle()
+    // ---------------- manual per-frame animation ----------------
+    // WPF's BeginAnimation on Window.Left/Top is known to not reliably reposition the actual
+    // OS window frame-by-frame, so both the momentum glide and the collapse/expand resize are
+    // driven by setting Left/Top/Width directly on every CompositionTarget.Rendering tick —
+    // the same mechanism the drag itself already uses successfully.
+
+    private void StartGlide()
+    {
+        _anim = AnimMode.Glide;
+        _frameTimeMs = _clock.Elapsed.TotalMilliseconds;
+        HookFrame();
+    }
+
+    private void StartTween(double toLeft, double toTop, double toWidth, double ms, Action? onDone = null)
+    {
+        _tFromL = Left; _tFromT = Top; _tFromW = Width;
+        _tToL = toLeft; _tToT = toTop; _tToW = toWidth;
+        _tElapsedMs = 0; _tDurationMs = Math.Max(1, ms);
+        _tweenDone = onDone;
+        _anim = AnimMode.Tween;
+        _frameTimeMs = _clock.Elapsed.TotalMilliseconds;
+        HookFrame();
+    }
+
+    private void StopAnim()
+    {
+        if (_anim == AnimMode.None) return;
+        _anim = AnimMode.None;
+        CompositionTarget.Rendering -= OnFrame;
+    }
+
+    private void HookFrame()
+    {
+        CompositionTarget.Rendering -= OnFrame; // avoid double-subscribe if switching modes
+        CompositionTarget.Rendering += OnFrame;
+    }
+
+    private void OnFrame(object? sender, EventArgs e)
+    {
+        double now = _clock.Elapsed.TotalMilliseconds;
+        double dt = Math.Min(40, now - _frameTimeMs); // clamp to avoid a big jump after a hitch
+        _frameTimeMs = now;
+
+        switch (_anim)
+        {
+            case AnimMode.Glide: StepGlide(dt); break;
+            case AnimMode.Tween: StepTween(dt); break;
+        }
+    }
+
+    private void StepGlide(double dt)
     {
         var wa = WorkArea();
-        double projX = Left + _vx * 110;   // ~110 ms of projected glide
-        double projY = Top + _vy * 110;
+        double nx = Left + _vx * dt;
+        double ny = Top + _vy * dt;
+        double cx = Clamp(nx, wa.Left, wa.Right - Width);
+        double cy = Clamp(ny, wa.Top, wa.Bottom - Height);
+        if (cx != nx) _vx = 0;   // hit a wall — stop that axis rather than bouncing
+        if (cy != ny) _vy = 0;
+        Left = cx; Top = cy;
 
+        double decay = Math.Pow(FrictionPerFrame, dt / 16.0);
+        _vx *= decay; _vy *= decay;
+
+        if (Math.Abs(_vx) < 0.02 && Math.Abs(_vy) < 0.02)
+        {
+            var (tx, ty) = SnapTarget(wa);
+            double dist = Math.Abs(tx - Left) + Math.Abs(ty - Top);
+            StartTween(tx, ty, Width, Clamp(dist * 1.5, 260, 560), () => A.Tracker.SavePillPosition(Left, Top));
+        }
+    }
+
+    private void StepTween(double dt)
+    {
+        _tElapsedMs += dt;
+        double t = Math.Min(1, _tElapsedMs / _tDurationMs);
+        double ease = 1 - Math.Pow(1 - t, 3); // ease-out cubic — decelerates into the rest position
+        Left = _tFromL + (_tToL - _tFromL) * ease;
+        Top = _tFromT + (_tToT - _tFromT) * ease;
+        Width = _tFromW + (_tToW - _tFromW) * ease;
+
+        if (t >= 1)
+        {
+            StopAnim();
+            var done = _tweenDone; _tweenDone = null;
+            done?.Invoke();
+        }
+    }
+
+    /// <summary>Nearest resting edge/corner for the pill's current size, always fully on-screen.</summary>
+    private (double x, double y) SnapTarget(Rect wa)
+    {
         double minL = wa.Left + EdgeMargin, maxL = wa.Right - Width - EdgeMargin;
         double minT = wa.Top + EdgeMargin, maxT = wa.Bottom - Height - EdgeMargin;
 
-        double tx = projX < wa.Left + EdgeMargin + SnapZone ? minL
-                  : projX > wa.Right - Width - EdgeMargin - SnapZone ? maxL
-                  : Clamp(projX, minL, maxL);
-        double ty = projY < wa.Top + EdgeMargin + SnapZone ? minT
-                  : projY > wa.Bottom - Height - EdgeMargin - SnapZone ? maxT
-                  : Clamp(projY, minT, maxT);
-
-        double dist = Math.Abs(tx - Left) + Math.Abs(ty - Top);
-        int ms = (int)Clamp(dist * 1.4, 280, 620);
-        Animate(LeftProperty, tx, ms, persistPosition: true);
-        Animate(TopProperty, ty, ms, persistPosition: true);
-    }
-
-    // ---------------- animation helpers ----------------
-
-    private void Animate(DependencyProperty prop, double to, int ms, bool persistPosition = false)
-    {
-        var anim = new DoubleAnimation(to, TimeSpan.FromMilliseconds(ms))
-        {
-            EasingFunction = new ExponentialEase { EasingMode = EasingMode.EaseOut, Exponent = 5 }
-        };
-        anim.Completed += (_, _) =>
-        {
-            BeginAnimation(prop, null);
-            SetValue(prop, to);
-            if (persistPosition) A.Tracker.SavePillPosition(Left, Top);
-        };
-        BeginAnimation(prop, anim);
-    }
-
-    private void StopAnimations()
-    {
-        BeginAnimation(LeftProperty, null);
-        BeginAnimation(TopProperty, null);
-        BeginAnimation(WidthProperty, null);
+        double tx = Left < wa.Left + EdgeMargin + SnapZone ? minL
+                  : Left > wa.Right - Width - EdgeMargin - SnapZone ? maxL
+                  : Clamp(Left, minL, maxL);
+        double ty = Top < wa.Top + EdgeMargin + SnapZone ? minT
+                  : Top > wa.Bottom - Height - EdgeMargin - SnapZone ? maxT
+                  : Clamp(Top, minT, maxT);
+        return (tx, ty);
     }
 
     // ---------------- geometry ----------------
@@ -207,7 +268,6 @@ public partial class PillWindow : Window
         var src = PresentationSource.FromVisual(this);
         var toDip = src?.CompositionTarget?.TransformFromDevice ?? Matrix.Identity;
 
-        // Device-pixel centre of the pill.
         var toDev = src?.CompositionTarget?.TransformToDevice ?? Matrix.Identity;
         var centerDev = toDev.Transform(new Point(Left + Width / 2, Top + Height / 2));
         var screen = System.Windows.Forms.Screen.FromPoint(

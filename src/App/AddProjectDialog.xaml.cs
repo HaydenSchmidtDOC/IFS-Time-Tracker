@@ -1,7 +1,5 @@
 using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Media;
-using System.Windows.Shapes;
+using System.Windows.Input;
 using TimeTracker.App.UI;
 using TimeTracker.Core;
 
@@ -9,18 +7,14 @@ namespace TimeTracker.App;
 
 public partial class AddProjectDialog : Window
 {
-    // Categorical palette (distinct hues that read on light + dark).
-    private static readonly string[] Palette =
-    {
-        "#2E9E6B", "#3B82C4", "#DE8E2C", "#DF4F68", "#8368D4",
-        "#2AA198", "#E5484D", "#64748B", "#6FA82F", "#E8590C",
-    };
+    // Fixed saturation/lightness for every project colour — only hue varies, via the slider.
+    private const double Saturation = 0.55;
+    private const double Lightness = 0.50;
 
     private readonly IReadOnlyList<Project> _existing;
     private readonly Project? _editing; // non-null when editing an existing project
-    private string _color = Palette[0];
+    private string _color = "#3B82C4";
     private Project? _result;
-    private readonly List<Border> _swatchBorders = new();
 
     private AddProjectDialog(IReadOnlyList<Project> existing, Project? editing)
     {
@@ -28,25 +22,33 @@ public partial class AddProjectDialog : Window
         _existing = existing;
         _editing = editing;
 
+        double initialHue;
         if (editing is not null)
         {
             HeadingText.Text = "Edit project";
             SaveBtn.Content = "Save changes";
+            ColorHelpText.Text = "Drag to change the colour.";
             CodeBox.Text = editing.Code;
             CodeBox.IsEnabled = false; // code is the stable key used in the log; keep it fixed
             CodeBox.Opacity = 0.65;
             AsnBox.Text = editing.Asn;
             NameBox.Text = editing.Name;
             _color = editing.Color;
+            initialHue = ColorUtil.GetHue(ColorUtil.Parse(editing.Color));
         }
         else
         {
-            // Pick the first palette colour not already used, for convenience.
-            _color = Palette.FirstOrDefault(c => existing.All(p => !string.Equals(p.Color, c, StringComparison.OrdinalIgnoreCase)))
-                     ?? Palette[0];
+            initialHue = FarthestHueFrom(existing);
+            _color = ColorUtil.ToHex(ColorUtil.FromHsl(initialHue, Saturation, Lightness));
         }
 
-        BuildSwatches();
+        // Set the slider's starting position before wiring the handler, so the initial
+        // auto-pick (or the edited project's original exact colour) isn't silently
+        // recomputed through the fixed saturation/lightness until the user actually drags it.
+        HueSlider.Value = initialHue;
+        PreviewBrush.Color = ColorUtil.Parse(_color);
+        HueSlider.ValueChanged += HueSlider_ValueChanged;
+
         Loaded += (_, _) => (editing is null ? CodeBox : AsnBox).Focus();
     }
 
@@ -66,31 +68,30 @@ public partial class AddProjectDialog : Window
         return d._result;
     }
 
-    private void BuildSwatches()
+    /// <summary>The hue (0-360) whose minimum circular distance to every existing project's hue is largest.</summary>
+    private static double FarthestHueFrom(IReadOnlyList<Project> existing)
     {
-        foreach (var hex in Palette)
+        if (existing.Count == 0) return 205; // a pleasant default blue
+        var hues = existing.Select(p => ColorUtil.GetHue(ColorUtil.Parse(p.Color))).ToList();
+        double best = 0, bestScore = -1;
+        for (int deg = 0; deg < 360; deg++)
         {
-            var dot = new Rectangle { Width = 24, Height = 24, RadiusX = 6, RadiusY = 6, Fill = ColorUtil.Brush(hex) };
-            var border = new Border
-            {
-                Child = dot, Margin = new Thickness(0, 0, 8, 8), CornerRadius = new CornerRadius(8),
-                Padding = new Thickness(2), BorderThickness = new Thickness(2),
-                BorderBrush = Brushes.Transparent, Cursor = System.Windows.Input.Cursors.Hand,
-                Tag = hex,
-            };
-            border.MouseLeftButtonUp += (_, _) => SelectColor(hex);
-            _swatchBorders.Add(border);
-            Swatches.Children.Add(border);
+            double minDist = hues.Min(h => CircularDistance(deg, h));
+            if (minDist > bestScore) { bestScore = minDist; best = deg; }
         }
-        HighlightSelected();
+        return best;
     }
 
-    private void SelectColor(string hex) { _color = hex; HighlightSelected(); }
-
-    private void HighlightSelected()
+    private static double CircularDistance(double a, double b)
     {
-        foreach (var b in _swatchBorders)
-            b.BorderBrush = (string)b.Tag == _color ? (Brush)FindResource("Accent") : Brushes.Transparent;
+        double d = Math.Abs(a - b) % 360;
+        return d > 180 ? 360 - d : d;
+    }
+
+    private void HueSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        _color = ColorUtil.ToHex(ColorUtil.FromHsl(e.NewValue, Saturation, Lightness));
+        PreviewBrush.Color = ColorUtil.Parse(_color);
     }
 
     private void Add_Click(object sender, RoutedEventArgs e)
@@ -119,4 +120,5 @@ public partial class AddProjectDialog : Window
 
     private void ShowError(string msg) { ErrorText.Text = msg; ErrorText.Visibility = Visibility.Visible; }
     private void Cancel_Click(object sender, RoutedEventArgs e) => Close();
+    private void Header_Drag(object sender, MouseButtonEventArgs e) { if (e.ChangedButton == MouseButton.Left) DragMove(); }
 }

@@ -5,13 +5,64 @@
         WindowStartupLocation="CenterOwner" WindowStyle="None" AllowsTransparency="True"
         Background="Transparent" ResizeMode="NoResize" ShowInTaskbar="False"
         FontFamily="{StaticResource UiFont}">
+    <Window.Resources>
+        <!-- Single hue slider: a rainbow track + a plain round thumb. Saturation/Lightness are
+             fixed constants in code-behind — deliberately no brightness/opacity control. -->
+        <Style x:Key="HueSliderStyle" TargetType="Slider">
+            <Setter Property="Minimum" Value="0"/>
+            <Setter Property="Maximum" Value="360"/>
+            <Setter Property="Height" Value="28"/>
+            <Setter Property="IsMoveToPointEnabled" Value="True"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Slider">
+                        <Grid VerticalAlignment="Center">
+                            <Border Height="10" CornerRadius="5">
+                                <Border.Background>
+                                    <LinearGradientBrush StartPoint="0,0.5" EndPoint="1,0.5">
+                                        <GradientStop Color="#FF0000" Offset="0"/>
+                                        <GradientStop Color="#FFFF00" Offset="0.1667"/>
+                                        <GradientStop Color="#00FF00" Offset="0.3333"/>
+                                        <GradientStop Color="#00FFFF" Offset="0.5"/>
+                                        <GradientStop Color="#0000FF" Offset="0.6667"/>
+                                        <GradientStop Color="#FF00FF" Offset="0.8333"/>
+                                        <GradientStop Color="#FF0000" Offset="1"/>
+                                    </LinearGradientBrush>
+                                </Border.Background>
+                            </Border>
+                            <Track x:Name="PART_Track">
+                                <Track.Thumb>
+                                    <Thumb>
+                                        <Thumb.Template>
+                                            <ControlTemplate TargetType="Thumb">
+                                                <Ellipse Width="22" Height="22" Fill="White"
+                                                         Stroke="#55000000" StrokeThickness="1.5">
+                                                    <Ellipse.Effect>
+                                                        <DropShadowEffect BlurRadius="6" ShadowDepth="1" Opacity="0.35"/>
+                                                    </Ellipse.Effect>
+                                                </Ellipse>
+                                            </ControlTemplate>
+                                        </Thumb.Template>
+                                    </Thumb>
+                                </Track.Thumb>
+                            </Track>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
     <Border Background="{DynamicResource Surface}" CornerRadius="12" Margin="12"
             BorderBrush="{DynamicResource BorderStrong}" BorderThickness="1">
         <Border.Effect>
             <DropShadowEffect BlurRadius="28" ShadowDepth="3" Opacity="0.26" Color="#20283C"/>
         </Border.Effect>
         <StackPanel Margin="18">
-            <TextBlock x:Name="HeadingText" Text="New project" FontSize="15" FontWeight="SemiBold" Foreground="{DynamicResource Text}"/>
+            <Border Background="Transparent" Cursor="SizeAll" MouseLeftButtonDown="Header_Drag">
+                <TextBlock x:Name="HeadingText" Text="New project" FontSize="15" FontWeight="SemiBold"
+                           Foreground="{DynamicResource Text}"/>
+            </Border>
 
             <TextBlock Text="PROJECT CODE" Style="{StaticResource EyebrowText}" Margin="0,14,0,4"/>
             <TextBox x:Name="CodeBox" Style="{StaticResource Input}" MaxLength="40"/>
@@ -22,8 +73,24 @@
             <TextBlock Text="DESCRIPTION (OPTIONAL)" Style="{StaticResource EyebrowText}" Margin="0,12,0,4"/>
             <TextBox x:Name="NameBox" Style="{StaticResource Input}" MaxLength="80"/>
 
-            <TextBlock Text="COLOUR" Style="{StaticResource EyebrowText}" Margin="0,14,0,6"/>
-            <WrapPanel x:Name="Swatches"/>
+            <TextBlock Text="COLOUR" Style="{StaticResource EyebrowText}" Margin="0,16,0,8"/>
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <Slider Grid.Column="0" x:Name="HueSlider" Style="{StaticResource HueSliderStyle}"
+                        VerticalAlignment="Center"/>
+                <Border Grid.Column="1" Width="30" Height="30" Margin="12,0,0,0" CornerRadius="15"
+                        BorderBrush="{DynamicResource BorderStrong}" BorderThickness="1.5">
+                    <Border.Background>
+                        <SolidColorBrush x:Name="PreviewBrush"/>
+                    </Border.Background>
+                </Border>
+            </Grid>
+            <TextBlock x:Name="ColorHelpText"
+                       Text="Starts on the colour furthest from your other projects — drag to pick your own."
+                       FontSize="11" Foreground="{DynamicResource TextFaint}" Margin="0,6,0,0" TextWrapping="Wrap"/>
 
             <TextBlock x:Name="ErrorText" Foreground="{DynamicResource Live}" FontSize="12"
                        Margin="0,10,0,0" Visibility="Collapsed" TextWrapping="Wrap"/>
