@@ -1,0 +1,15 @@
+# Normalise line endings; let git handle CRLF on checkout for Windows.
+* text=auto
+
+*.cs      text diff=csharp
+*.csproj  text
+*.xaml    text
+*.json    text
+*.md      text
+*.manifest text
+*.gitignore text
+*.gitattributes text
+
+# Binary assets
+*.ico  binary
+*.png  binary

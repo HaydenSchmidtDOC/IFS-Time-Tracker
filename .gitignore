@@ -1,0 +1,25 @@
+# ---- Claude Code local files ----
+.claude/
+
+# ---- .NET build output ----
+bin/
+obj/
+[Bb]in/
+[Oo]bj/
+*.user
+*.suo
+.vs/
+
+# ---- Publish output ----
+dist/
+publish/
+*.publish.xml.user
+
+# ---- Runtime time-log data (personal; syncs via OneDrive, not git) ----
+# Keep the folder + defaults, ignore generated logs/state.
+data/log-*.csv
+data/state.json
+
+# ---- OS noise ----
+Thumbs.db
+Desktop.ini

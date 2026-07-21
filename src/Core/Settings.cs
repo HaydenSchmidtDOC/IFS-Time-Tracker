@@ -1,0 +1,42 @@
+namespace TimeTracker.Core;
+
+/// <summary>
+/// User settings, persisted to <c>data/settings.json</c>. Covers the configurable
+/// IFS export mapping, idle behaviour, and where data lives.
+/// </summary>
+public sealed class Settings
+{
+    /// <summary>
+    /// Optional override for the data folder. When null/empty, the folder next to the
+    /// executable (this OneDrive repo's <c>data\</c>) is used so it syncs automatically.
+    /// </summary>
+    public string? DataFolderOverride { get; set; }
+
+    /// <summary>Minutes of no input (or a lock) before the idle prompt is offered on return.</summary>
+    public int IdleThresholdMinutes { get; set; } = 10;
+
+    /// <summary>Whether to prompt for an optional note when a block ends.</summary>
+    public bool PromptForNote { get; set; } = true;
+
+    /// <summary>Show the always-on-top pill.</summary>
+    public bool PillVisible { get; set; } = true;
+
+    /// <summary>
+    /// IFS export column mapping. Key = the exact header IFS expects (output column),
+    /// Value = the internal field to pull from. Order of keys defines column order.
+    /// Valid field tokens: Date, ProjectCode, Asn, ProjectName, StartLocal, EndLocal,
+    /// DurationSeconds, DurationHours, Notes. A literal value can be emitted with the
+    /// "=literal" form (e.g. "=DOC" to hard-code a column).
+    /// </summary>
+    public Dictionary<string, string> IfsExportMapping { get; set; } = new()
+    {
+        ["Project ID"]   = "ProjectCode",
+        ["Activity Seq"] = "Asn",
+        ["Date"]         = "Date",
+        ["Hours"]        = "DurationHours",
+        ["Note"]         = "Notes",
+    };
+
+    /// <summary>Date format used in the exported "Date" column.</summary>
+    public string ExportDateFormat { get; set; } = "yyyy-MM-dd";
+}
