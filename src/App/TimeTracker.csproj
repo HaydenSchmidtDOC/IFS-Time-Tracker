@@ -32,8 +32,10 @@
 
   <!-- Single-file, self-contained publish so target machines need nothing installed.
        Publish with:
-         dotnet publish src/TimeTracker.csproj -c Release -r win-x64 -p:PublishProfile=SelfContained -->
-  <PropertyGroup Condition="'$(PublishProfile)' == 'SelfContained'">
+         dotnet publish src/App/TimeTracker.csproj -c Release -p:PublishSelfContained=true -o dist
+       (MSBuild's built-in "PublishProfile" property means a .pubxml file, so this uses a
+       differently-named switch to avoid a spurious "profile not found" warning.) -->
+  <PropertyGroup Condition="'$(PublishSelfContained)' == 'true'">
     <SelfContained>true</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <PublishSingleFile>true</PublishSingleFile>

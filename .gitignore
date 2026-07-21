@@ -16,9 +16,9 @@ publish/
 *.publish.xml.user
 
 # ---- Runtime time-log data (personal; syncs via OneDrive, not git) ----
-# Keep the folder + defaults, ignore generated logs/state.
-data/log-*.csv
-data/state.json
+# Build output already covers data/ under bin/ (dotnet run) and dist/ (publish); this
+# additionally guards a root-level data/ if the exe is ever run from the repo root.
+/data/
 
 # ---- OS noise ----
 Thumbs.db
