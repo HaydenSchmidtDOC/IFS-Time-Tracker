@@ -41,9 +41,11 @@ public partial class MainWindow : Window
 
         EmptyHint.Visibility = _rows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
 
+        // Restore the prior selection, or the active/live project's row — but never auto-pick an
+        // arbitrary project just to have something selected; a fresh boot with nothing running
+        // should show no selection at all rather than an unprompted highlight border.
         var restore = _rows.FirstOrDefault(r => r.Code == selectedCode)
-                      ?? _rows.FirstOrDefault(r => r.Code == A.Tracker.Active?.Code)
-                      ?? _rows.FirstOrDefault();
+                      ?? _rows.FirstOrDefault(r => r.Code == A.Tracker.Active?.Code);
         ProjectList.SelectedItem = restore;
     }
 

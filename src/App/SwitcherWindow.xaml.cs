@@ -40,11 +40,26 @@ public partial class SwitcherWindow : Window
 
     private void UpdateHighlight()
     {
+        bool liveIsHighlighted = false;
         for (int i = 0; i < _rows.Count; i++)
         {
             bool on = i == _hi;
-            _rows[i].RowBg = on ? Tint(_rows[i].Project.Color, 0.18) : Brushes.Transparent;
+            var row = _rows[i];
+            row.RowBg = on ? Tint(row.Project.Color, 0.18) : Brushes.Transparent;
+
+            bool isLive = A.Tracker.IsRunning && row.Code == A.Tracker.Active?.Code;
+            if (isLive)
+            {
+                // Confirming the already-live row stops tracking instead of a no-op "switch to
+                // itself" — flip its badge to spell that out only while it's the highlighted one.
+                row.BadgeText = on ? "■ STOP" : "LIVE";
+                if (on) liveIsHighlighted = true;
+            }
         }
+        HintText.Text = liveIsHighlighted ? "Enter to stop" : "↑ ↓ · Enter · dbl-click";
+        HintText.Foreground = liveIsHighlighted
+            ? (Brush)FindResource("Live")
+            : (Brush)FindResource("TextFaint");
     }
 
     private static Brush Tint(string hex, double alpha)
@@ -58,8 +73,9 @@ public partial class SwitcherWindow : Window
         if (_rows.Count == 0) { Close(); return; }
         var chosen = _rows[_hi].Project;
         _closing = true;
-        if (!(A.Tracker.IsRunning && chosen.Code == A.Tracker.Active?.Code))
-            A.StartOrSwitch(chosen);
+        bool isLive = A.Tracker.IsRunning && chosen.Code == A.Tracker.Active?.Code;
+        if (isLive) A.StopWithPrompt();
+        else A.StartOrSwitch(chosen);
         Close();
     }
 
@@ -103,6 +119,9 @@ public sealed class SwitchRow : INotifyPropertyChanged
 
     private Brush _rowBg = Brushes.Transparent;
     public Brush RowBg { get => _rowBg; set { _rowBg = value; Notify(nameof(RowBg)); } }
+
+    private string _badgeText = "LIVE";
+    public string BadgeText { get => _badgeText; set { _badgeText = value; Notify(nameof(BadgeText)); } }
 
     public SwitchRow(Project p)
     {

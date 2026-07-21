@@ -23,9 +23,13 @@ public partial class SettingsWindow : Window
         var s = A.Settings;
         PromptNoteCheck.IsChecked = s.PromptForNote;
         ShowPillCheck.IsChecked = s.PillVisible;
+        ShowTrayCheck.IsChecked = s.ShowTrayIcon;
+        StartMinimizedCheck.IsChecked = s.StartMinimized;
+        StartWithWindowsCheck.IsChecked = StartupRegistration.IsEnabled();
         IdleBox.Text = s.IdleThresholdMinutes.ToString();
         DateFormatBox.Text = s.ExportDateFormat;
         DataFolderText.Text = A.Paths.DataFolder;
+        DataOverrideBox.Text = s.DataFolderOverride ?? "";
 
         _projects = A.Tracker.Projects.Select(Clone).ToList();
         _mapping = s.IfsExportMapping.Select(m => new MappingEntry { Header = m.Header, Field = m.Field }).ToList();
@@ -164,12 +168,26 @@ public partial class SettingsWindow : Window
         catch { /* best effort */ }
     }
 
+    private void BrowseFolder_Click(object sender, RoutedEventArgs e)
+    {
+        using var dlg = new System.Windows.Forms.FolderBrowserDialog
+        {
+            Description = "Choose a folder for IFS Time Tracker data",
+            SelectedPath = string.IsNullOrWhiteSpace(DataOverrideBox.Text) ? A.Paths.DataFolder : DataOverrideBox.Text,
+            ShowNewFolderButton = true,
+        };
+        if (dlg.ShowDialog() == System.Windows.Forms.DialogResult.OK)
+            DataOverrideBox.Text = dlg.SelectedPath;
+    }
+
     // ================= save/close =================
 
     private void SaveToSettings()
     {
         var s = A.Settings;
         s.PromptForNote = PromptNoteCheck.IsChecked == true;
+        s.StartMinimized = StartMinimizedCheck.IsChecked == true;
+        s.DataFolderOverride = string.IsNullOrWhiteSpace(DataOverrideBox.Text) ? null : DataOverrideBox.Text.Trim();
         if (int.TryParse(IdleBox.Text, out var mins) && mins > 0) s.IdleThresholdMinutes = mins;
         s.ExportDateFormat = string.IsNullOrWhiteSpace(DateFormatBox.Text) ? s.ExportDateFormat : DateFormatBox.Text;
         s.IfsExportMapping = _mapping.Where(m => !string.IsNullOrWhiteSpace(m.Header)).ToList();
@@ -178,6 +196,8 @@ public partial class SettingsWindow : Window
 
         A.Tracker.UpdateProjects(_projects);
         A.SetPillVisible(ShowPillCheck.IsChecked == true);
+        A.SetTrayIconVisible(ShowTrayCheck.IsChecked == true);
+        StartupRegistration.SetEnabled(StartWithWindowsCheck.IsChecked == true);
     }
 
     private void Save_Click(object sender, RoutedEventArgs e) { SaveToSettings(); Close(); }

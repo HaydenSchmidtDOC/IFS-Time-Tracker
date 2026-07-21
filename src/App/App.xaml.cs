@@ -65,7 +65,16 @@ public partial class App : Application
         {
             Paths = new AppPaths(Settings.DataFolderOverride);
             Store = new JsonStore(Paths);
+            Settings = Store.LoadSettings(); // re-read from the override folder's own settings.json,
+                                              // not the bootstrap copy next to the exe that only
+                                              // told us where to look
         }
+        // Never let a settings combination leave the app with literally no visible surface —
+        // no tray icon, no pill, and a hidden main window would be unrecoverable without killing
+        // the process from Task Manager.
+        if (Settings.StartMinimized && !Settings.ShowTrayIcon && !Settings.PillVisible)
+            Settings.StartMinimized = false;
+
         Log = new CsvLog(Paths);
         Tracker = new TrackerService(Store, Log);
         Exporter = new IfsExporter(Log, Paths);
@@ -91,7 +100,7 @@ public partial class App : Application
         _uiTimer.Start();
 
         UpdateTray();
-        ShowMainWindow();
+        if (!Settings.StartMinimized) ShowMainWindow();
     }
 
     // ---------------- theme ----------------
@@ -138,7 +147,7 @@ public partial class App : Application
         _tray = new WinForms.NotifyIcon
         {
             Text = "IFS Time Tracker",
-            Visible = true,
+            Visible = Settings.ShowTrayIcon,
         };
         _tray.DoubleClick += (_, _) => ShowMainWindow();
 
@@ -243,6 +252,14 @@ public partial class App : Application
         Settings.PillVisible = visible;
         Store.SaveSettings(Settings);
         if (visible) _pill.Show(); else _pill.Hide();
+    }
+
+    /// <summary>Show or hide the system-tray icon and persist the preference.</summary>
+    public void SetTrayIconVisible(bool visible)
+    {
+        Settings.ShowTrayIcon = visible;
+        Store.SaveSettings(Settings);
+        _tray.Visible = visible;
     }
 
     public void QuitApp()

@@ -53,10 +53,9 @@
         </Style>
     </Window.Resources>
 
-    <Border Background="{DynamicResource Surface}" CornerRadius="12" Margin="12"
-            BorderBrush="{DynamicResource BorderStrong}" BorderThickness="1">
+    <Border Background="{DynamicResource Surface}" CornerRadius="12" Margin="12">
         <Border.Effect>
-            <DropShadowEffect BlurRadius="28" ShadowDepth="3" Opacity="0.26" Color="#20283C"/>
+            <DropShadowEffect BlurRadius="10" ShadowDepth="2" Opacity="0.32" Color="#20283C"/>
         </Border.Effect>
         <StackPanel Margin="18">
             <Border Background="Transparent" Cursor="SizeAll" MouseLeftButtonDown="Header_Drag">

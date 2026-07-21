@@ -35,6 +35,12 @@ public sealed class Settings
     /// <summary>Show the always-on-top pill.</summary>
     public bool PillVisible { get; set; } = true;
 
+    /// <summary>Show the system-tray icon.</summary>
+    public bool ShowTrayIcon { get; set; } = true;
+
+    /// <summary>Start with the main window hidden (tray/pill only) rather than shown.</summary>
+    public bool StartMinimized { get; set; } = false;
+
     /// <summary>
     /// IFS export column mapping, in output column order. Refine the headers once a real
     /// IFS timesheet export is available — this is a settings edit, not a code change.

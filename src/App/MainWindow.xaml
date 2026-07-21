@@ -7,10 +7,9 @@
         ResizeMode="NoResize" FontFamily="{StaticResource UiFont}"
         TextOptions.TextFormattingMode="Ideal" UseLayoutRounding="True">
 
-    <Border Background="{DynamicResource Surface}" CornerRadius="12" Margin="12"
-            BorderBrush="{DynamicResource Border}" BorderThickness="1">
+    <Border Background="{DynamicResource Surface}" CornerRadius="12" Margin="12">
         <Border.Effect>
-            <DropShadowEffect BlurRadius="28" ShadowDepth="3" Opacity="0.22" Color="#20283C"/>
+            <DropShadowEffect BlurRadius="10" ShadowDepth="2" Opacity="0.30" Color="#20283C"/>
         </Border.Effect>
         <Grid>
             <Grid.RowDefinitions>
@@ -25,10 +24,8 @@
                     <TextBlock Text="IFS Time Tracker" VerticalAlignment="Center"
                                FontSize="12.5" FontWeight="SemiBold" Foreground="{DynamicResource TextDim}"/>
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                        <Button Content="—" Click="Minimize_Click" Style="{StaticResource Btn}"
-                                BorderThickness="0" Background="Transparent" Padding="8,2" FontSize="13"/>
-                        <Button Content="✕" Click="HideToTray_Click" Style="{StaticResource Btn}"
-                                BorderThickness="0" Background="Transparent" Padding="8,2" FontSize="12"/>
+                        <Button Content="—" Click="Minimize_Click" Style="{StaticResource IconBtn}" FontSize="13"/>
+                        <Button Content="✕" Click="HideToTray_Click" Style="{StaticResource IconBtn}" FontSize="12"/>
                     </StackPanel>
                 </Grid>
             </Border>

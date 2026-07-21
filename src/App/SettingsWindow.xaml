@@ -5,10 +5,9 @@
         WindowStartupLocation="CenterOwner" WindowStyle="None" AllowsTransparency="True"
         Background="Transparent" ResizeMode="NoResize" ShowInTaskbar="False"
         FontFamily="{StaticResource UiFont}">
-    <Border Background="{DynamicResource Surface}" CornerRadius="12" Margin="12"
-            BorderBrush="{DynamicResource Border}" BorderThickness="1">
+    <Border Background="{DynamicResource Surface}" CornerRadius="12" Margin="12">
         <Border.Effect>
-            <DropShadowEffect BlurRadius="30" ShadowDepth="4" Opacity="0.28" Color="#161C2A"/>
+            <DropShadowEffect BlurRadius="10" ShadowDepth="2" Opacity="0.34" Color="#161C2A"/>
         </Border.Effect>
         <Grid>
             <Grid.RowDefinitions>
@@ -21,8 +20,7 @@
                 <Grid Margin="14,0,8,0">
                     <TextBlock Text="Settings" VerticalAlignment="Center" FontSize="12.5"
                                FontWeight="SemiBold" Foreground="{DynamicResource TextDim}"/>
-                    <Button Content="✕" Click="Close_Click" HorizontalAlignment="Right" Style="{StaticResource Btn}"
-                            BorderThickness="0" Background="Transparent" Padding="8,2" FontSize="12"/>
+                    <Button Content="✕" Click="Close_Click" HorizontalAlignment="Right" Style="{StaticResource IconBtn}" FontSize="12"/>
                 </Grid>
             </Border>
 
@@ -34,6 +32,12 @@
                     <CheckBox x:Name="PromptNoteCheck" Content="Prompt for an optional note on stop/switch"
                               Foreground="{DynamicResource Text}" FontSize="13" Margin="0,0,0,8"/>
                     <CheckBox x:Name="ShowPillCheck" Content="Show the floating status pill"
+                              Foreground="{DynamicResource Text}" FontSize="13" Margin="0,0,0,8"/>
+                    <CheckBox x:Name="ShowTrayCheck" Content="Show the system-tray icon"
+                              Foreground="{DynamicResource Text}" FontSize="13" Margin="0,0,0,8"/>
+                    <CheckBox x:Name="StartMinimizedCheck" Content="Start minimised (tray/pill only, no window)"
+                              Foreground="{DynamicResource Text}" FontSize="13" Margin="0,0,0,8"/>
+                    <CheckBox x:Name="StartWithWindowsCheck" Content="Start automatically when Windows starts"
                               Foreground="{DynamicResource Text}" FontSize="13" Margin="0,0,0,10"/>
                     <Grid>
                         <Grid.ColumnDefinitions>
@@ -63,15 +67,23 @@
                     <TextBlock Text="DATA LOCATION" Style="{StaticResource EyebrowText}" Margin="0,0,0,8"/>
                     <TextBlock x:Name="DataFolderText" FontSize="12" Foreground="{DynamicResource TextDim}"
                                TextWrapping="Wrap" Margin="0,0,0,8"/>
+                    <Button Content="Open data folder" Click="OpenFolder_Click" Style="{StaticResource Btn}"
+                            HorizontalAlignment="Left"/>
+                    <TextBlock Text="Data lives in this OneDrive folder by default, so it syncs automatically."
+                               FontSize="11" Foreground="{DynamicResource TextFaint}" Margin="0,6,0,14" TextWrapping="Wrap"/>
+
+                    <TextBlock Text="OVERRIDE FOLDER (OPTIONAL)" Style="{StaticResource EyebrowText}" Margin="0,0,0,4"/>
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="8"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <Button Grid.Column="0" Content="Open data folder" Click="OpenFolder_Click" Style="{StaticResource Btn}"/>
+                        <TextBox Grid.Column="0" x:Name="DataOverrideBox" Style="{StaticResource Input}"
+                                 FontSize="12"/>
+                        <Button Grid.Column="2" Content="Browse…" Click="BrowseFolder_Click" Style="{StaticResource Btn}"/>
                     </Grid>
-                    <TextBlock Text="Data lives in this OneDrive folder by default, so it syncs automatically."
+                    <TextBlock Text="Leave blank to use the default location above. Changing this takes effect after restarting the app."
                                FontSize="11" Foreground="{DynamicResource TextFaint}" Margin="0,6,0,0" TextWrapping="Wrap"/>
 
                     <Border Height="1" Background="{DynamicResource Border}" Margin="0,18"/>
