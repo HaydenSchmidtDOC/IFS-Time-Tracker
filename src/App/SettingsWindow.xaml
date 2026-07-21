@@ -1,0 +1,119 @@
+<Window x:Class="TimeTracker.App.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Settings" Width="420" Height="600"
+        WindowStartupLocation="CenterOwner" WindowStyle="None" AllowsTransparency="True"
+        Background="Transparent" ResizeMode="NoResize" ShowInTaskbar="False"
+        FontFamily="{StaticResource UiFont}">
+    <Border Background="{DynamicResource Surface}" CornerRadius="12" Margin="12"
+            BorderBrush="{DynamicResource Border}" BorderThickness="1">
+        <Border.Effect>
+            <DropShadowEffect BlurRadius="30" ShadowDepth="4" Opacity="0.28" Color="#161C2A"/>
+        </Border.Effect>
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <Border Grid.Row="0" Background="{DynamicResource Surface2}" CornerRadius="12,12,0,0"
+                    Height="38" MouseLeftButtonDown="TitleBar_Drag">
+                <Grid Margin="14,0,8,0">
+                    <TextBlock Text="Settings" VerticalAlignment="Center" FontSize="12.5"
+                               FontWeight="SemiBold" Foreground="{DynamicResource TextDim}"/>
+                    <Button Content="✕" Click="Close_Click" HorizontalAlignment="Right" Style="{StaticResource Btn}"
+                            BorderThickness="0" Background="Transparent" Padding="8,2" FontSize="12"/>
+                </Grid>
+            </Border>
+
+            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="20,14,20,18">
+                <StackPanel>
+
+                    <!-- ===== Tracking ===== -->
+                    <TextBlock Text="TRACKING" Style="{StaticResource EyebrowText}" Margin="0,0,0,8"/>
+                    <CheckBox x:Name="PromptNoteCheck" Content="Prompt for an optional note on stop/switch"
+                              Foreground="{DynamicResource Text}" FontSize="13" Margin="0,0,0,8"/>
+                    <CheckBox x:Name="ShowPillCheck" Content="Show the floating status pill"
+                              Foreground="{DynamicResource Text}" FontSize="13" Margin="0,0,0,10"/>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="70"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="Idle threshold before prompting to keep/discard (minutes)"
+                                   FontSize="12.5" Foreground="{DynamicResource TextDim}" TextWrapping="Wrap"
+                                   VerticalAlignment="Center"/>
+                        <TextBox Grid.Column="1" x:Name="IdleBox" Style="{StaticResource Input}"
+                                 HorizontalContentAlignment="Center"/>
+                    </Grid>
+
+                    <Border Height="1" Background="{DynamicResource Border}" Margin="0,18"/>
+
+                    <!-- ===== Projects ===== -->
+                    <Grid Margin="0,0,0,8">
+                        <TextBlock Text="PROJECTS" Style="{StaticResource EyebrowText}" VerticalAlignment="Center"/>
+                        <Button Content="＋ Add" HorizontalAlignment="Right" Padding="10,4" FontSize="12"
+                                Click="AddProject_Click" Style="{StaticResource Btn}"/>
+                    </Grid>
+                    <ItemsControl x:Name="ProjectsList"/>
+
+                    <Border Height="1" Background="{DynamicResource Border}" Margin="0,18"/>
+
+                    <!-- ===== Data location ===== -->
+                    <TextBlock Text="DATA LOCATION" Style="{StaticResource EyebrowText}" Margin="0,0,0,8"/>
+                    <TextBlock x:Name="DataFolderText" FontSize="12" Foreground="{DynamicResource TextDim}"
+                               TextWrapping="Wrap" Margin="0,0,0,8"/>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="8"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <Button Grid.Column="0" Content="Open data folder" Click="OpenFolder_Click" Style="{StaticResource Btn}"/>
+                    </Grid>
+                    <TextBlock Text="Data lives in this OneDrive folder by default, so it syncs automatically."
+                               FontSize="11" Foreground="{DynamicResource TextFaint}" Margin="0,6,0,0" TextWrapping="Wrap"/>
+
+                    <Border Height="1" Background="{DynamicResource Border}" Margin="0,18"/>
+
+                    <!-- ===== IFS export ===== -->
+                    <TextBlock Text="IFS EXPORT MAPPING" Style="{StaticResource EyebrowText}" Margin="0,0,0,4"/>
+                    <TextBlock Text="IFS header ← internal field. Refine once a real IFS export is shared — no code change needed."
+                               FontSize="11" Foreground="{DynamicResource TextFaint}" TextWrapping="Wrap" Margin="0,0,0,10"/>
+                    <ItemsControl x:Name="MappingList"/>
+                    <Button Content="＋ Add column" Click="AddMapping_Click" Style="{StaticResource Btn}"
+                            HorizontalAlignment="Left" Padding="10,4" FontSize="12" Margin="0,6,0,0"/>
+
+                    <Grid Margin="0,14,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="90"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="Export date format" FontSize="12.5" Foreground="{DynamicResource TextDim}"
+                                   VerticalAlignment="Center"/>
+                        <TextBox Grid.Column="1" x:Name="DateFormatBox" Style="{StaticResource Input}"/>
+                    </Grid>
+
+                    <Grid Margin="0,14,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="8"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <Button Grid.Column="0" Content="◂" Click="PrevMonth_Click" Style="{StaticResource Btn}" Padding="10,7"/>
+                        <TextBlock Grid.Column="1" x:Name="MonthLabel" Text="July 2026" FontSize="13" FontWeight="SemiBold"
+                                   Foreground="{DynamicResource Text}" VerticalAlignment="Center" HorizontalAlignment="Center"
+                                   MinWidth="90" TextAlignment="Center"/>
+                        <Button Grid.Column="2" Content="▸" Click="NextMonth_Click" Style="{StaticResource Btn}" Padding="10,7"/>
+                    </Grid>
+                    <Button Content="⇩ Export month for IFS" Click="Export_Click" Style="{StaticResource BtnAccent}" Margin="0,10,0,0"/>
+                    <TextBlock x:Name="ExportResultText" FontSize="11.5" Foreground="{DynamicResource TextDim}"
+                               TextWrapping="Wrap" Margin="0,8,0,0" Visibility="Collapsed"/>
+
+                    <Border Height="1" Background="{DynamicResource Border}" Margin="0,18"/>
+                    <Button Content="Save" Click="Save_Click" Style="{StaticResource BtnAccent}"/>
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+    </Border>
+</Window>

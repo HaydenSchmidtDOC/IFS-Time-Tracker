@@ -1,13 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
   <assemblyIdentity version="1.0.0.0" name="IFS.TimeTracker.app" />
-  <application xmlns="urn:schemas-microsoft-com:asm.v3">
-    <windowsSettings>
-      <!-- Per-monitor DPI so the pill and switcher render crisply on any display. -->
-      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
-      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true</dpiAware>
-    </windowsSettings>
-  </application>
+  <!-- DPI awareness is set via the ApplicationHighDpiMode project property instead of here,
+       since this exe mixes WPF and WinForms (tray icon) — see TimeTracker.csproj. -->
+  <application xmlns="urn:schemas-microsoft-com:asm.v3" />
   <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
     <application>
       <!-- Windows 10 / 11 -->

@@ -27,9 +27,9 @@ public sealed class IfsExporter
         var mapping = settings.IfsExportMapping;
 
         using var w = new StreamWriter(outFile, append: false);
-        w.WriteLine(Csv.Line(mapping.Keys));
+        w.WriteLine(Csv.Line(mapping.Select(m => m.Header)));
         foreach (var b in blocks)
-            w.WriteLine(Csv.Line(mapping.Values.Select(field => Resolve(field, b, settings))));
+            w.WriteLine(Csv.Line(mapping.Select(m => Resolve(m.Field, b, settings))));
 
         return outFile;
     }

@@ -134,6 +134,53 @@ public class TrackerServiceTests : IDisposable
     }
 }
 
+public class IfsExporterTests : IDisposable
+{
+    private readonly string _dir;
+    private readonly AppPaths _paths;
+    private readonly CsvLog _log;
+
+    public IfsExporterTests()
+    {
+        _dir = Path.Combine(Path.GetTempPath(), "tt-export-tests-" + Guid.NewGuid().ToString("N"));
+        _paths = new AppPaths(_dir);
+        _log = new CsvLog(_paths);
+    }
+
+    public void Dispose() { try { Directory.Delete(_dir, true); } catch { } }
+
+    [Fact]
+    public void ExportsColumnsInMappingOrder_WithLiterals()
+    {
+        _log.Append(new TimeBlock
+        {
+            ProjectCode = "BRIDGE-42", Asn = "100234", ProjectName = "Bridge conveyor",
+            StartLocal = new DateTime(2026, 7, 21, 8, 0, 0),
+            EndLocal = new DateTime(2026, 7, 21, 10, 24, 0),
+            DurationSeconds = 8640, Notes = "aligned rollers",
+        });
+
+        var settings = new Settings
+        {
+            IfsExportMapping = new()
+            {
+                new() { Header = "Source",  Field = "=TIMETRACKER" }, // literal
+                new() { Header = "Code",    Field = "ProjectCode" },
+                new() { Header = "Hrs",     Field = "DurationHours" },
+                new() { Header = "When",    Field = "Date" },
+            },
+            ExportDateFormat = "dd/MM/yyyy",
+        };
+
+        var exporter = new IfsExporter(_log, _paths);
+        var file = exporter.ExportMonth(2026, 7, settings);
+        var lines = File.ReadAllLines(file);
+
+        Assert.Equal("Source,Code,Hrs,When", lines[0]);
+        Assert.Equal("TIMETRACKER,BRIDGE-42,2.4,21/07/2026", lines[1]);
+    }
+}
+
 public class CsvTests
 {
     [Fact]

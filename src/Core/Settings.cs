@@ -1,5 +1,19 @@
 namespace TimeTracker.Core;
 
+/// <summary>One output column in the IFS export: the header IFS expects, and where its value comes from.</summary>
+public sealed class MappingEntry
+{
+    /// <summary>The exact column header IFS expects in the CSV.</summary>
+    public string Header { get; set; } = "";
+
+    /// <summary>
+    /// Internal field token to pull the value from: Date, ProjectCode, Asn, ProjectName,
+    /// StartLocal, EndLocal, DurationSeconds, DurationHours, Notes. A literal value can be
+    /// emitted with the "=literal" form (e.g. "=DOC" to hard-code a column).
+    /// </summary>
+    public string Field { get; set; } = "";
+}
+
 /// <summary>
 /// User settings, persisted to <c>data/settings.json</c>. Covers the configurable
 /// IFS export mapping, idle behaviour, and where data lives.
@@ -22,19 +36,16 @@ public sealed class Settings
     public bool PillVisible { get; set; } = true;
 
     /// <summary>
-    /// IFS export column mapping. Key = the exact header IFS expects (output column),
-    /// Value = the internal field to pull from. Order of keys defines column order.
-    /// Valid field tokens: Date, ProjectCode, Asn, ProjectName, StartLocal, EndLocal,
-    /// DurationSeconds, DurationHours, Notes. A literal value can be emitted with the
-    /// "=literal" form (e.g. "=DOC" to hard-code a column).
+    /// IFS export column mapping, in output column order. Refine the headers once a real
+    /// IFS timesheet export is available — this is a settings edit, not a code change.
     /// </summary>
-    public Dictionary<string, string> IfsExportMapping { get; set; } = new()
+    public List<MappingEntry> IfsExportMapping { get; set; } = new()
     {
-        ["Project ID"]   = "ProjectCode",
-        ["Activity Seq"] = "Asn",
-        ["Date"]         = "Date",
-        ["Hours"]        = "DurationHours",
-        ["Note"]         = "Notes",
+        new() { Header = "Project ID",   Field = "ProjectCode" },
+        new() { Header = "Activity Seq", Field = "Asn" },
+        new() { Header = "Date",         Field = "Date" },
+        new() { Header = "Hours",        Field = "DurationHours" },
+        new() { Header = "Note",         Field = "Notes" },
     };
 
     /// <summary>Date format used in the exported "Date" column.</summary>

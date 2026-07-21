@@ -1,0 +1,31 @@
+<Window x:Class="TimeTracker.App.NotePrompt"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Add note" Width="300" SizeToContent="Height"
+        WindowStartupLocation="CenterScreen" WindowStyle="None" AllowsTransparency="True"
+        Background="Transparent" ResizeMode="NoResize" ShowInTaskbar="False"
+        Topmost="True" FontFamily="{StaticResource UiFont}">
+    <Border Background="{DynamicResource Surface}" CornerRadius="12" Margin="12"
+            BorderBrush="{DynamicResource BorderStrong}" BorderThickness="1">
+        <Border.Effect>
+            <DropShadowEffect BlurRadius="28" ShadowDepth="3" Opacity="0.26" Color="#20283C"/>
+        </Border.Effect>
+        <StackPanel Margin="16">
+            <TextBlock x:Name="Heading" Text="Add a note" FontSize="14" FontWeight="SemiBold"
+                       Foreground="{DynamicResource Text}"/>
+            <TextBlock x:Name="Sub" FontSize="12" Foreground="{DynamicResource TextDim}"
+                       TextWrapping="Wrap" Margin="0,4,0,12"
+                       Text="Optional — describe what you worked on. Saved to the CSV for this block."/>
+            <TextBox x:Name="NoteBox" Style="{StaticResource Input}" MaxLength="500"/>
+            <Grid Margin="0,12,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="8"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Button Grid.Column="0" Content="Skip" Click="Skip_Click" Style="{StaticResource Btn}"/>
+                <Button Grid.Column="2" Content="Save" Click="Save_Click" Style="{StaticResource BtnAccent}" IsDefault="True"/>
+            </Grid>
+        </StackPanel>
+    </Border>
+</Window>

@@ -1,0 +1,42 @@
+<Window x:Class="TimeTracker.App.AddProjectDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Add project" Width="320" SizeToContent="Height"
+        WindowStartupLocation="CenterOwner" WindowStyle="None" AllowsTransparency="True"
+        Background="Transparent" ResizeMode="NoResize" ShowInTaskbar="False"
+        FontFamily="{StaticResource UiFont}">
+    <Border Background="{DynamicResource Surface}" CornerRadius="12" Margin="12"
+            BorderBrush="{DynamicResource BorderStrong}" BorderThickness="1">
+        <Border.Effect>
+            <DropShadowEffect BlurRadius="28" ShadowDepth="3" Opacity="0.26" Color="#20283C"/>
+        </Border.Effect>
+        <StackPanel Margin="18">
+            <TextBlock x:Name="HeadingText" Text="New project" FontSize="15" FontWeight="SemiBold" Foreground="{DynamicResource Text}"/>
+
+            <TextBlock Text="PROJECT CODE" Style="{StaticResource EyebrowText}" Margin="0,14,0,4"/>
+            <TextBox x:Name="CodeBox" Style="{StaticResource Input}" MaxLength="40"/>
+
+            <TextBlock Text="ASN NUMBER" Style="{StaticResource EyebrowText}" Margin="0,12,0,4"/>
+            <TextBox x:Name="AsnBox" Style="{StaticResource Input}" MaxLength="40"/>
+
+            <TextBlock Text="DESCRIPTION (OPTIONAL)" Style="{StaticResource EyebrowText}" Margin="0,12,0,4"/>
+            <TextBox x:Name="NameBox" Style="{StaticResource Input}" MaxLength="80"/>
+
+            <TextBlock Text="COLOUR" Style="{StaticResource EyebrowText}" Margin="0,14,0,6"/>
+            <WrapPanel x:Name="Swatches"/>
+
+            <TextBlock x:Name="ErrorText" Foreground="{DynamicResource Live}" FontSize="12"
+                       Margin="0,10,0,0" Visibility="Collapsed" TextWrapping="Wrap"/>
+
+            <Grid Margin="0,16,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="8"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Button Grid.Column="0" Content="Cancel" Click="Cancel_Click" Style="{StaticResource Btn}"/>
+                <Button Grid.Column="2" x:Name="SaveBtn" Content="Add project" Click="Add_Click" Style="{StaticResource BtnAccent}" IsDefault="True"/>
+            </Grid>
+        </StackPanel>
+    </Border>
+</Window>

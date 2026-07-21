@@ -10,6 +10,8 @@
     <RootNamespace>TimeTracker</RootNamespace>
     <AssemblyName>IFS Time Tracker</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- Per-monitor DPI so the pill and switcher render crisply on any display. -->
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <Version>0.1.0</Version>
     <Product>IFS Time Tracker</Product>
     <Company>Daifuku Oceania</Company>
@@ -17,6 +19,15 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Core\TimeTracker.Core.csproj" />
+  </ItemGroup>
+
+  <!-- UseWPF + UseWindowsForms both implicitly global-`using` their namespaces, which collide
+       (Application, Brush, Point, KeyEventArgs, MouseEventArgs exist in both). WPF types are used
+       unqualified throughout; the few WinForms/Drawing call sites (tray icon, Screen) use explicit
+       aliases or fully-qualified names, so it's safe to drop these two from the implicit set. -->
+  <ItemGroup>
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
   </ItemGroup>
 
   <!-- Single-file, self-contained publish so target machines need nothing installed.
