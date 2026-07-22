@@ -56,4 +56,13 @@ public sealed class Settings
 
     /// <summary>Date format used in the exported "Date" column.</summary>
     public string ExportDateFormat { get; set; } = "yyyy-MM-dd";
+
+    /// <summary>
+    /// Timesheet chart display-only threshold (hours): a day's project segments below this are
+    /// folded into one neutral "Other" bar segment (tooltip shows the exact breakdown) so a day
+    /// touching many small projects doesn't turn into a wall of slivers. 0 disables folding —
+    /// every segment always shows individually. Never affects recorded data or the IFS export,
+    /// only how the chart draws it.
+    /// </summary>
+    public double ChartMinSegmentHours { get; set; } = 0.25;
 }

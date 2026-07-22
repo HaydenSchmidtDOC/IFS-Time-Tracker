@@ -1,0 +1,91 @@
+<Window x:Class="TimeTracker.App.TimesheetWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        Title="Timesheets — IFS Time Tracker"
+        Width="920" Height="640" MinWidth="640" MinHeight="440"
+        WindowStyle="None" ResizeMode="CanResize" ShowInTaskbar="True"
+        Background="{DynamicResource Bg}" FontFamily="{StaticResource UiFont}"
+        Closing="Window_Closing" StateChanged="Window_StateChanged">
+    <!-- WindowChrome keeps native resize/maximize/Aero-Snap/taskbar-thumbnail behaviour while
+         letting the title bar be custom-drawn (matching the rest of the app) instead of stock OS
+         chrome. CaptionHeight must match the header Border's own Height below; anything inside
+         that band needs IsHitTestVisibleInChrome="True" or its clicks turn into window-drags. -->
+    <shell:WindowChrome.WindowChrome>
+        <shell:WindowChrome CaptionHeight="64" ResizeBorderThickness="6" GlassFrameThickness="0"
+                             CornerRadius="8" UseAeroCaptionButtons="False"/>
+    </shell:WindowChrome.WindowChrome>
+
+    <!-- RenderTransformOrigin=0,0 + the named Scale/Translate below let the open/close transition
+         animate a pure GPU-composited transform on the content instead of resizing the actual
+         OS window frame-by-frame (which is heavy/janky for a window with real chrome — see
+         AnimateOpenFrom/AnimateCloseTo). -->
+    <Grid RenderTransformOrigin="0,0">
+        <Grid.RenderTransform>
+            <TransformGroup>
+                <ScaleTransform x:Name="ScaleXform"/>
+                <TranslateTransform x:Name="TranslateXform"/>
+            </TransformGroup>
+        </Grid.RenderTransform>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- header: doubles as the custom title bar (Height matches CaptionHeight above) -->
+        <Border Grid.Row="0" Height="64" Background="{DynamicResource Surface2}" Padding="20,0">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0" VerticalAlignment="Center" shell:WindowChrome.IsHitTestVisibleInChrome="True">
+                    <TextBlock Text="WEEK TOTAL" Style="{StaticResource EyebrowText}"/>
+                    <TextBlock x:Name="WeekTotalText" Text="0.0 h" FontSize="18" FontWeight="SemiBold"
+                               FontFamily="{StaticResource MonoFont}" Foreground="{DynamicResource Text}"/>
+                </StackPanel>
+
+                <!-- ColumnSpan=3 centers this on the whole header, not just the leftover space
+                     between the two side columns (which are different widths). -->
+                <StackPanel Grid.Column="0" Grid.ColumnSpan="3" Orientation="Horizontal"
+                            HorizontalAlignment="Center" VerticalAlignment="Center"
+                            shell:WindowChrome.IsHitTestVisibleInChrome="True">
+                    <Button Content="◂" Click="PrevWeek_Click" Style="{StaticResource Btn}" Padding="10,7" ToolTip="Previous week"/>
+                    <TextBlock x:Name="WeekLabel" FontSize="14" FontWeight="SemiBold" MinWidth="230"
+                               TextAlignment="Center" VerticalAlignment="Center" Margin="14,0"
+                               Foreground="{DynamicResource Text}" FontFamily="{StaticResource MonoFont}"/>
+                    <Button Content="▸" Click="NextWeek_Click" Style="{StaticResource Btn}" Padding="10,7" ToolTip="Next week"/>
+                </StackPanel>
+
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center"
+                            shell:WindowChrome.IsHitTestVisibleInChrome="True">
+                    <Button Content="—" Click="Minimize_Click" Style="{StaticResource IconBtn}" FontSize="13"/>
+                    <Button x:Name="MaxRestoreBtn" Content="▢" Click="MaxRestore_Click" Style="{StaticResource IconBtn}" FontSize="11"/>
+                    <Button Content="✕" Click="Close_Click" Style="{StaticResource IconBtn}" FontSize="12"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- chart -->
+        <Grid Grid.Row="1" Margin="24" MouseWheel="ChartArea_MouseWheel" Background="Transparent">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*"/>
+                <!-- Fixed, not Auto: a wrapping legend's height changes with window width, which
+                     fed back into the chart card's available height and made resizing jittery. -->
+                <RowDefinition Height="48"/>
+            </Grid.RowDefinitions>
+
+            <Border x:Name="ChartCard" Grid.Row="0" Background="{DynamicResource Surface}" CornerRadius="10"
+                    ClipToBounds="True" SizeChanged="ChartCard_SizeChanged">
+                <Grid x:Name="ChartHost" Margin="20" ClipToBounds="True"/>
+            </Border>
+
+            <ScrollViewer Grid.Row="1" Margin="4,14,0,0" VerticalScrollBarVisibility="Disabled"
+                          HorizontalScrollBarVisibility="Auto">
+                <StackPanel x:Name="Legend" Orientation="Horizontal"/>
+            </ScrollViewer>
+        </Grid>
+    </Grid>
+</Window>

@@ -10,10 +10,15 @@
             <DropShadowEffect BlurRadius="10" ShadowDepth="2" Opacity="0.32" Color="#20283C"/>
         </Border.Effect>
         <StackPanel Margin="16">
-            <TextBlock x:Name="Heading" Text="Add a note" FontSize="14" FontWeight="SemiBold"
-                       Foreground="{DynamicResource Text}"/>
-            <TextBlock x:Name="Sub" FontSize="12" Foreground="{DynamicResource TextDim}"
-                       TextWrapping="Wrap" Margin="0,4,0,12"
+            <TextBlock Text="Add a note" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource Text}"/>
+
+            <!-- A clear reminder of which project this note is saved against. -->
+            <StackPanel Orientation="Horizontal" Margin="0,8,0,2">
+                <Ellipse x:Name="ProjectDot" Width="10" Height="10" VerticalAlignment="Center" Margin="0,0,7,0"/>
+                <TextBlock x:Name="ProjectText" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource Text}"/>
+            </StackPanel>
+            <TextBlock x:Name="Sub" FontSize="11.5" Foreground="{DynamicResource TextFaint}"
+                       TextWrapping="Wrap" Margin="0,0,0,12"
                        Text="Optional — describe what you worked on. Saved to the CSV for this block."/>
             <TextBox x:Name="NoteBox" Style="{StaticResource Input}" MaxLength="500"/>
             <Grid Margin="0,12,0,0">

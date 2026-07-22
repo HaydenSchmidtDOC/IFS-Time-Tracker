@@ -41,11 +41,13 @@ public partial class MainWindow : Window
 
         EmptyHint.Visibility = _rows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
 
-        // Restore the prior selection, or the active/live project's row — but never auto-pick an
-        // arbitrary project just to have something selected; a fresh boot with nothing running
-        // should show no selection at all rather than an unprompted highlight border.
-        var restore = _rows.FirstOrDefault(r => r.Code == selectedCode)
-                      ?? _rows.FirstOrDefault(r => r.Code == A.Tracker.Active?.Code);
+        // Whatever is actually live takes priority — e.g. switching projects via the quick
+        // switcher or the pill should be reflected here too, not leave the old selection
+        // sitting stale. Only fall back to the prior selection (or none at all) once nothing
+        // is running; a fresh boot with nothing active shouldn't auto-pick an arbitrary
+        // project just to have something selected.
+        var restore = _rows.FirstOrDefault(r => r.Code == A.Tracker.Active?.Code)
+                      ?? _rows.FirstOrDefault(r => r.Code == selectedCode);
         ProjectList.SelectedItem = restore;
     }
 
@@ -55,19 +57,34 @@ public partial class MainWindow : Window
         var tracker = A.Tracker;
         bool running = tracker.IsRunning;
         var active = tracker.Active;
+        var sel = Selected;
 
         // live card
         if (running && active is not null)
         {
             LiveDot.Fill = ColorUtil.Brush(active.Color);
+            LiveDot.Opacity = 1.0;
             LiveCode.Text = active.Code;
             LiveAsn.Text = $"ASN {active.Asn}" + (string.IsNullOrWhiteSpace(active.Name) ? "" : $" · {active.Name}");
             RecBadge.Visibility = Visibility.Visible;
             TimerText.Text = App.FormatElapsed(tracker.CurrentElapsedSeconds);
         }
+        else if (sel is not null)
+        {
+            // Nothing running yet, but a project is selected — preview it here instead of a
+            // generic placeholder, so it's clear what pressing start would begin. Dimmed dot +
+            // no REC badge keeps it visually distinct from an actually-running project.
+            LiveDot.Fill = ColorUtil.Brush(sel.Project.Color);
+            LiveDot.Opacity = 0.5;
+            LiveCode.Text = sel.Code;
+            LiveAsn.Text = $"ASN {sel.Project.Asn}" + (string.IsNullOrWhiteSpace(sel.Project.Name) ? "" : $" · {sel.Project.Name}");
+            RecBadge.Visibility = Visibility.Collapsed;
+            TimerText.Text = "00:00:00";
+        }
         else
         {
             LiveDot.Fill = (Brush)FindResource("TextFaint");
+            LiveDot.Opacity = 1.0;
             LiveCode.Text = "Not tracking";
             LiveAsn.Text = tracker.Projects.Count == 0 ? "Add a project to begin" : "Select a project, then press start";
             RecBadge.Visibility = Visibility.Collapsed;
@@ -146,7 +163,7 @@ public partial class MainWindow : Window
         if (Selected is { } sel) A.StartOrSwitch(sel.Project);
     }
 
-    private void ProjectList_SelectionChanged(object sender, SelectionChangedEventArgs e) => UpdatePrimary();
+    private void ProjectList_SelectionChanged(object sender, SelectionChangedEventArgs e) { UpdatePrimary(); UpdateLive(); }
     private void ProjectList_DoubleClick(object sender, MouseButtonEventArgs e) => StartSelected();
     private void ProjectList_KeyDown(object sender, KeyEventArgs e)
     {
@@ -164,6 +181,8 @@ public partial class MainWindow : Window
         new SettingsWindow { Owner = this }.ShowDialog();
         OnStateChanged();
     }
+
+    private void Timesheets_Click(object sender, RoutedEventArgs e) => A.OpenTimesheets();
 
     // ---- custom chrome ----
     private void TitleBar_Drag(object sender, MouseButtonEventArgs e)

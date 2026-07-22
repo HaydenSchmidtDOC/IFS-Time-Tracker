@@ -90,8 +90,15 @@
                                Foreground="{DynamicResource TextDim}"/>
                 </Grid>
 
+                <!-- IsVirtualizing=False: the Window uses SizeToContent="Height", and a
+                     virtualized ListBox can report its DesiredSize before all items have been
+                     realized/measured, so the window sometimes computes a height that's a row
+                     short on the very first layout pass — clipping the last project behind the
+                     footer. The list is always small (a handful of projects), so forcing every
+                     item to be measured up front costs nothing and removes the race. -->
                 <ListBox x:Name="ProjectList" BorderThickness="0" Background="Transparent"
                          MaxHeight="260" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         VirtualizingPanel.IsVirtualizing="False"
                          SelectionChanged="ProjectList_SelectionChanged"
                          MouseDoubleClick="ProjectList_DoubleClick" KeyDown="ProjectList_KeyDown">
                     <ListBox.ItemContainerStyle>
@@ -101,8 +108,14 @@
                             <Setter Property="Template">
                                 <Setter.Value>
                                     <ControlTemplate TargetType="ListBoxItem">
+                                        <!-- BorderThickness is constant (always 1.5) — only BorderBrush toggles
+                                             on selection (Transparent -> Accent). Changing BorderThickness itself
+                                             via the trigger grew the selected row's occupied size mid-layout,
+                                             which could overlap the row below it. Brush-only changes are pure
+                                             paint, never layout, so this can't happen. -->
                                         <Border x:Name="row" CornerRadius="8" Background="Transparent"
-                                                Padding="{TemplateBinding Padding}">
+                                                Padding="{TemplateBinding Padding}"
+                                                BorderThickness="1.5" BorderBrush="Transparent">
                                             <ContentPresenter/>
                                         </Border>
                                         <ControlTemplate.Triggers>
@@ -112,7 +125,6 @@
                                             <Trigger Property="IsSelected" Value="True">
                                                 <Setter TargetName="row" Property="Background" Value="{DynamicResource Surface3}"/>
                                                 <Setter TargetName="row" Property="BorderBrush" Value="{DynamicResource Accent}"/>
-                                                <Setter TargetName="row" Property="BorderThickness" Value="1.5"/>
                                             </Trigger>
                                         </ControlTemplate.Triggers>
                                     </ControlTemplate>
@@ -152,7 +164,9 @@
                            Visibility="Collapsed"/>
 
                 <!-- footer -->
-                <Grid Margin="0,14,0,0">
+                <Button Content="📊 View timesheets" Click="Timesheets_Click" Style="{StaticResource Btn}"
+                        Margin="0,14,0,8"/>
+                <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="8"/>

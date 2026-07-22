@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Input;
+using TimeTracker.App.UI;
 using TimeTracker.Core;
 
 namespace TimeTracker.App;
@@ -11,7 +12,8 @@ public partial class NotePrompt : Window
     private NotePrompt(Project ending)
     {
         InitializeComponent();
-        Sub.Text = $"Optional note for the {ending.Code} block you're ending. Saved to the CSV.";
+        ProjectDot.Fill = ColorUtil.Brush(ending.Color);
+        ProjectText.Text = string.IsNullOrWhiteSpace(ending.Name) ? ending.Code : $"{ending.Code} · {ending.Name}";
         Loaded += (_, _) => { NoteBox.Focus(); };
         KeyDown += (_, e) => { if (e.Key == Key.Escape) { _result = null; Close(); } };
     }

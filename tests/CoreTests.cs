@@ -179,6 +179,55 @@ public class IfsExporterTests : IDisposable
         Assert.Equal("Source,Code,Hrs,When", lines[0]);
         Assert.Equal("TIMETRACKER,BRIDGE-42,2.4,21/07/2026", lines[1]);
     }
+
+    [Fact]
+    public void ReadRange_SpansTwoMonthFiles_AndExcludesOutOfRangeDays()
+    {
+        TimeBlock On(DateTime d) => new()
+        {
+            ProjectCode = "A", Asn = "1", StartLocal = d, EndLocal = d.AddHours(1), DurationSeconds = 3600,
+        };
+        _log.Append(On(new DateTime(2026, 7, 30))); // in range (Jul, week start)
+        _log.Append(On(new DateTime(2026, 7, 31))); // in range (Jul, last day)
+        _log.Append(On(new DateTime(2026, 8, 1)));  // in range (Aug, week continues)
+        _log.Append(On(new DateTime(2026, 8, 2)));  // in range (Aug, week end)
+        _log.Append(On(new DateTime(2026, 7, 29))); // out of range — day before the week
+        _log.Append(On(new DateTime(2026, 8, 3)));  // out of range — day after the week
+
+        var blocks = _log.ReadRange(new DateTime(2026, 7, 30), new DateTime(2026, 8, 2));
+
+        Assert.Equal(4, blocks.Count);
+        Assert.All(blocks, b => Assert.InRange(b.StartLocal.Date, new DateTime(2026, 7, 30), new DateTime(2026, 8, 2)));
+    }
+
+    [Fact]
+    public void DeleteBlock_RemovesOnlyTheMatchingRow()
+    {
+        var keep1 = new TimeBlock { ProjectCode = "A", StartLocal = new DateTime(2026, 7, 21, 8, 0, 0), EndLocal = new DateTime(2026, 7, 21, 9, 0, 0), DurationSeconds = 3600 };
+        var target = new TimeBlock { ProjectCode = "B", StartLocal = new DateTime(2026, 7, 21, 9, 0, 0), EndLocal = new DateTime(2026, 7, 21, 9, 30, 0), DurationSeconds = 1800 };
+        var keep2 = new TimeBlock { ProjectCode = "A", StartLocal = new DateTime(2026, 7, 21, 9, 30, 0), EndLocal = new DateTime(2026, 7, 21, 10, 0, 0), DurationSeconds = 1800 };
+        _log.Append(keep1); _log.Append(target); _log.Append(keep2);
+
+        bool removed = _log.DeleteBlock(target);
+
+        Assert.True(removed);
+        var remaining = _log.ReadMonth(2026, 7);
+        Assert.Equal(2, remaining.Count);
+        Assert.DoesNotContain(remaining, b => b.ProjectCode == "B");
+    }
+
+    [Fact]
+    public void DeleteBlock_NoMatch_ReturnsFalseAndLeavesFileUntouched()
+    {
+        var b = new TimeBlock { ProjectCode = "A", StartLocal = new DateTime(2026, 7, 21, 8, 0, 0), EndLocal = new DateTime(2026, 7, 21, 9, 0, 0), DurationSeconds = 3600 };
+        _log.Append(b);
+
+        var notThere = new TimeBlock { ProjectCode = "A", StartLocal = new DateTime(2026, 7, 21, 10, 0, 0), EndLocal = new DateTime(2026, 7, 21, 11, 0, 0) };
+        bool removed = _log.DeleteBlock(notThere);
+
+        Assert.False(removed);
+        Assert.Single(_log.ReadMonth(2026, 7));
+    }
 }
 
 public class CsvTests

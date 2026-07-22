@@ -68,6 +68,53 @@ public sealed class CsvLog
         return result;
     }
 
+    /// <summary>
+    /// Read every block whose start date falls within [from, toInclusive] — may span month
+    /// files (e.g. a week straddling a month boundary), so this reads each touched month once.
+    /// </summary>
+    public List<TimeBlock> ReadRange(DateTime from, DateTime toInclusive)
+    {
+        var result = new List<TimeBlock>();
+        var cursor = new DateTime(from.Year, from.Month, 1);
+        var lastMonth = new DateTime(toInclusive.Year, toInclusive.Month, 1);
+        while (cursor <= lastMonth)
+        {
+            foreach (var b in ReadMonth(cursor.Year, cursor.Month))
+                if (b.StartLocal.Date >= from.Date && b.StartLocal.Date <= toInclusive.Date)
+                    result.Add(b);
+            cursor = cursor.AddMonths(1);
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Remove a single recorded block, matched by project code + exact start/end timestamps
+    /// (blocks have no stored id; this triple is unique in practice since the tracker always
+    /// advances time between blocks). Returns true if a matching row was found and removed.
+    /// </summary>
+    public bool DeleteBlock(TimeBlock target)
+    {
+        var file = _paths.LogFileFor(target.StartLocal);
+        if (!File.Exists(file)) return false;
+
+        var lines = File.ReadAllLines(file).ToList();
+        for (int i = 1; i < lines.Count; i++) // skip header
+        {
+            if (string.IsNullOrWhiteSpace(lines[i])) continue;
+            var f = Csv.ParseLine(lines[i]);
+            if (f.Count < Header.Length) continue;
+
+            if (string.Equals(f[1], target.ProjectCode, StringComparison.OrdinalIgnoreCase)
+                && ParseDate(f[4]) == target.StartLocal && ParseDate(f[5]) == target.EndLocal)
+            {
+                lines.RemoveAt(i);
+                File.WriteAllLines(file, lines);
+                return true;
+            }
+        }
+        return false;
+    }
+
     /// <summary>Sum tracked seconds per project code for a given local date (for "Today").</summary>
     public Dictionary<string, long> SecondsByProjectOn(DateTime localDate)
     {

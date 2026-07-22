@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -15,6 +16,8 @@ public partial class SettingsWindow : Window
     private readonly List<Project> _projects;                 // working copy
     private readonly List<MappingEntry> _mapping;              // working copy
     private DateTime _exportMonth = new(DateTime.Today.Year, DateTime.Today.Month, 1);
+    private double _chartMinSegmentHours;
+    private bool _closingConfirmed;                            // set once Save/Discard has resolved, so OnClosing doesn't re-prompt
 
     public SettingsWindow()
     {
@@ -30,6 +33,7 @@ public partial class SettingsWindow : Window
         DateFormatBox.Text = s.ExportDateFormat;
         DataFolderText.Text = A.Paths.DataFolder;
         DataOverrideBox.Text = s.DataFolderOverride ?? "";
+        _chartMinSegmentHours = s.ChartMinSegmentHours;
 
         _projects = A.Tracker.Projects.Select(Clone).ToList();
         _mapping = s.IfsExportMapping.Select(m => new MappingEntry { Header = m.Header, Field = m.Field }).ToList();
@@ -37,7 +41,43 @@ public partial class SettingsWindow : Window
         RebuildProjectRows();
         RebuildMappingRows();
         RefreshMonthLabel();
+
+        // If the saved value is already index 0, setting Value=0 below is a no-op and
+        // ValueChanged never fires — so the label text is applied explicitly here too, not
+        // left to only happen as a side effect of the event.
+        int startIdx = ClosestDensityIndex(_chartMinSegmentHours);
+        DensitySlider.Value = startIdx;
+        RefreshDensityLabel(startIdx);
     }
+
+    // ================= chart density =================
+    // The slider is index-based (0-6), not value-based — the presets aren't evenly spaced
+    // (fine-grained near zero, coarser further out), so a real-valued slider couldn't snap
+    // evenly across them.
+
+    private static readonly double[] DensityPresets = { 0, 0.05, 0.1, 0.25, 0.5, 1, 2 };
+
+    private static int ClosestDensityIndex(double hours)
+    {
+        int best = 0;
+        double bestDiff = double.MaxValue;
+        for (int i = 0; i < DensityPresets.Length; i++)
+        {
+            double diff = Math.Abs(DensityPresets[i] - hours);
+            if (diff < bestDiff) { bestDiff = diff; best = i; }
+        }
+        return best;
+    }
+
+    private void DensitySlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        int idx = (int)Math.Round(e.NewValue);
+        _chartMinSegmentHours = DensityPresets[idx];
+        RefreshDensityLabel(idx);
+    }
+
+    private void RefreshDensityLabel(int idx)
+        => DensityValueText.Text = DensityPresets[idx] <= 0 ? "Off" : $"Fold under {DensityPresets[idx]:0.##} h";
 
     private static Project Clone(Project p) => new() { Code = p.Code, Asn = p.Asn, Name = p.Name, Color = p.Color, Order = p.Order };
 
@@ -191,6 +231,7 @@ public partial class SettingsWindow : Window
         if (int.TryParse(IdleBox.Text, out var mins) && mins > 0) s.IdleThresholdMinutes = mins;
         s.ExportDateFormat = string.IsNullOrWhiteSpace(DateFormatBox.Text) ? s.ExportDateFormat : DateFormatBox.Text;
         s.IfsExportMapping = _mapping.Where(m => !string.IsNullOrWhiteSpace(m.Header)).ToList();
+        s.ChartMinSegmentHours = _chartMinSegmentHours;
         A.Store.SaveSettings(s);
         A.RefreshIdleThreshold();
 
@@ -200,7 +241,76 @@ public partial class SettingsWindow : Window
         StartupRegistration.SetEnabled(StartWithWindowsCheck.IsChecked == true);
     }
 
-    private void Save_Click(object sender, RoutedEventArgs e) { SaveToSettings(); Close(); }
+    private void Save_Click(object sender, RoutedEventArgs e) { _closingConfirmed = true; SaveToSettings(); Close(); }
     private void Close_Click(object sender, RoutedEventArgs e) => Close();
     private void TitleBar_Drag(object sender, MouseButtonEventArgs e) { if (e.ChangedButton == MouseButton.Left) DragMove(); }
+
+    // ================= unsaved-changes guard =================
+
+    protected override void OnClosing(CancelEventArgs e)
+    {
+        if (!_closingConfirmed && HasUnsavedChanges())
+        {
+            e.Cancel = true;
+            switch (UnsavedChangesPrompt.Ask(this))
+            {
+                case UnsavedChangesResult.Save:
+                    _closingConfirmed = true;
+                    SaveToSettings();
+                    Close();
+                    break;
+                case UnsavedChangesResult.Discard:
+                    _closingConfirmed = true;
+                    Close();
+                    break;
+                case UnsavedChangesResult.Cancel:
+                default:
+                    break; // stay open
+            }
+            return;
+        }
+
+        base.OnClosing(e);
+    }
+
+    private bool HasUnsavedChanges()
+    {
+        var s = A.Settings;
+        if (PromptNoteCheck.IsChecked == true != s.PromptForNote) return true;
+        if (ShowPillCheck.IsChecked == true != s.PillVisible) return true;
+        if (ShowTrayCheck.IsChecked == true != s.ShowTrayIcon) return true;
+        if (StartMinimizedCheck.IsChecked == true != s.StartMinimized) return true;
+        if (StartWithWindowsCheck.IsChecked == true != StartupRegistration.IsEnabled()) return true;
+        if (int.TryParse(IdleBox.Text, out var mins) && mins > 0 && mins != s.IdleThresholdMinutes) return true;
+        if (DateFormatBox.Text != s.ExportDateFormat) return true;
+
+        var overrideText = string.IsNullOrWhiteSpace(DataOverrideBox.Text) ? null : DataOverrideBox.Text.Trim();
+        if (overrideText != s.DataFolderOverride) return true;
+
+        if (_chartMinSegmentHours != s.ChartMinSegmentHours) return true;
+        if (!ProjectsEqual(_projects, A.Tracker.Projects)) return true;
+        if (!MappingEqual(_mapping, s.IfsExportMapping)) return true;
+
+        return false;
+    }
+
+    private static bool ProjectsEqual(IReadOnlyList<Project> a, IReadOnlyList<Project> b)
+    {
+        if (a.Count != b.Count) return false;
+        for (int i = 0; i < a.Count; i++)
+        {
+            var x = a[i]; var y = b[i];
+            if (x.Code != y.Code || x.Asn != y.Asn || x.Name != y.Name || x.Color != y.Color || x.Order != y.Order)
+                return false;
+        }
+        return true;
+    }
+
+    private static bool MappingEqual(IReadOnlyList<MappingEntry> a, IReadOnlyList<MappingEntry> b)
+    {
+        if (a.Count != b.Count) return false;
+        for (int i = 0; i < a.Count; i++)
+            if (a[i].Header != b[i].Header || a[i].Field != b[i].Field) return false;
+        return true;
+    }
 }

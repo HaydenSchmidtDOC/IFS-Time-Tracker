@@ -33,6 +33,7 @@ public partial class App : Application
     private MainWindow _main = null!;
     private PillWindow _pill = null!;
     private SwitcherWindow? _switcher;
+    private TimesheetWindow? _timesheets;
 
     /// <summary>Fires once a second so open windows can repaint the running timer.</summary>
     public event Action? Tick;
@@ -105,6 +106,10 @@ public partial class App : Application
 
     // ---------------- theme ----------------
 
+    /// <summary>Whether the app resolved to the light theme — consulted by windows (the
+    /// timesheet view) that need to match their native OS chrome to it.</summary>
+    public bool IsLightTheme { get; private set; } = true;
+
     private void ApplyTheme()
     {
         bool light = true;
@@ -115,6 +120,7 @@ public partial class App : Application
             if (k?.GetValue("AppsUseLightTheme") is int v) light = v != 0;
         }
         catch { /* default light */ }
+        IsLightTheme = light;
 
         var dict = new ResourceDictionary
         {
@@ -229,10 +235,42 @@ public partial class App : Application
     public void OpenSwitcher()
     {
         if (_switcher is { IsVisible: true }) { _switcher.Activate(); return; }
+        _hotkeys.PauseAll(); // let Ctrl+Up/Down work as plain navigation while it's open — see HotKeyManager.PauseAll
         _switcher = new SwitcherWindow();
-        _switcher.Closed += (_, _) => _switcher = null;
+        _switcher.Closed += (_, _) => { _switcher = null; _hotkeys.ResumeAll(); };
         _switcher.Show();
         _switcher.Activate();
+    }
+
+    /// <summary>Open the weekly timesheet view, animating it growing out of the main window.</summary>
+    public void OpenTimesheets()
+    {
+        _timesheets ??= new TimesheetWindow();
+        if (_timesheets.IsVisible) { _timesheets.Activate(); return; }
+        _timesheets.AnimateOpenFrom(_main);
+        _main.Hide();
+    }
+
+    /// <summary>Shrink the timesheet view back into the main window and reveal it again.</summary>
+    public void CloseTimesheets()
+    {
+        if (_timesheets is not { IsVisible: true } ts) return;
+
+        // The two windows should feel like one app: if the timesheet window got dragged/resized
+        // elsewhere, the main window follows it back rather than reappearing at its original
+        // launch position. Repositioning happens while main is still hidden, so it's invisible.
+        var wa = TimesheetWindow.WorkAreaFor(ts);
+        double mainLeft = TimesheetWindow.Clamp(ts.Left + ts.Width / 2 - _main.Width / 2, wa.Left, wa.Right - _main.Width);
+        double mainTop = TimesheetWindow.Clamp(ts.Top + ts.Height / 2 - _main.Height / 2, wa.Top, wa.Bottom - _main.Height);
+        _main.Left = mainLeft;
+        _main.Top = mainTop;
+
+        ts.AnimateCloseTo(_main, () =>
+        {
+            _main.Show();
+            if (_main.WindowState == WindowState.Minimized) _main.WindowState = WindowState.Normal;
+            _main.Activate();
+        });
     }
 
     private void OnIdleEnded(DateTime idleStartUtc)
@@ -272,6 +310,7 @@ public partial class App : Application
         _tray.Dispose();
         _trayIcon?.Dispose();
         _pill?.Close();
+        _timesheets?.Close();
         _main?.Close();
         Shutdown();
     }
