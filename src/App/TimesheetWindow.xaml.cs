@@ -241,92 +241,73 @@ public partial class TimesheetWindow : Window
     {
         WeekLabel.Text = FormatWeekLabel(_weekStart);
 
-        var byDay = new Dictionary<DateTime, Dictionary<string, double>>();
-        // Tracks each project's MOST RECENT activity that day (max end time), not its first
-        // touch — a project worked at 8am and again at 2pm should stack near the top (most
-        // recently active), not sit low just because it was also touched early.
-        var lastActivity = new Dictionary<DateTime, Dictionary<string, DateTime>>();
-        for (int i = 0; i < 7; i++)
-        {
-            var d = _weekStart.AddDays(i);
-            byDay[d] = new(StringComparer.OrdinalIgnoreCase);
-            lastActivity[d] = new(StringComparer.OrdinalIgnoreCase);
-        }
+        // Raw blocks per day (chronological), not pre-aggregated — grouping into bar segments
+        // depends on the merge-mode setting (see BuildDaySegments) and needs the actual session
+        // boundaries and notes to do that, not just a per-project total.
+        var byDay = new Dictionary<DateTime, List<TimeBlock>>();
+        for (int i = 0; i < 7; i++) byDay[_weekStart.AddDays(i)] = new List<TimeBlock>();
 
         double weekTotal = 0;
         foreach (var b in GetWeekBlocks())
         {
             var day = b.StartLocal.Date;
-            if (!byDay.TryGetValue(day, out var perProject)) continue;
-            perProject.TryGetValue(b.ProjectCode, out var cur);
-            perProject[b.ProjectCode] = cur + b.DurationHours;
+            if (!byDay.TryGetValue(day, out var list)) continue;
+            list.Add(b);
             weekTotal += b.DurationHours;
-
-            var latest = lastActivity[day];
-            if (!latest.TryGetValue(b.ProjectCode, out var seen) || b.EndLocal > seen)
-                latest[b.ProjectCode] = b.EndLocal;
         }
+        foreach (var list in byDay.Values) list.Sort((a, b) => a.StartLocal.CompareTo(b.StartLocal));
 
-        // Fold in the still-running block — it isn't written to the CSV until it ends, but the
-        // chart should reflect what's actually happening right now, not just what's saved so far.
-        // Its "last activity" is simply now, which — being later than anything else that could
-        // possibly be recorded — guarantees it sorts to the very top.
+        // Fold in the still-running block as a real (if synthetic/unsaved) TimeBlock — it isn't
+        // written to the CSV until it ends, but the chart should reflect what's actually
+        // happening right now. Building it as an actual TimeBlock, appended chronologically last,
+        // means grouping/ordering/folding all treat it exactly like a committed one with no
+        // special-casing beyond identifying which block IS the live one (see BuildDaySegments).
         var today = DateTime.Today;
-        string? liveCode = null;
-        if (A.Tracker.IsRunning && A.Tracker.Active is { } active && byDay.TryGetValue(today, out var todayProjects))
+        TimeBlock? liveBlock = null;
+        // byDay only has keys for the currently-displayed week — today isn't one of them once
+        // you've navigated away from the current week, so this must check rather than index
+        // directly (byDay[today] threw KeyNotFoundException and crashed the app on any scroll
+        // away from the current week while a project was actively tracking).
+        if (A.Tracker.IsRunning && A.Tracker.Active is { } active && A.Tracker.State.BlockStartUtc is DateTime startUtc
+            && byDay.TryGetValue(today, out var todayBlocks))
         {
-            double liveHours = A.Tracker.CurrentElapsedSeconds / 3600.0;
-            todayProjects.TryGetValue(active.Code, out var cur);
-            todayProjects[active.Code] = cur + liveHours;
-            weekTotal += liveHours;
-
-            lastActivity[today][active.Code] = DateTime.Now;
-            liveCode = active.Code;
+            liveBlock = new TimeBlock
+            {
+                ProjectCode = active.Code, Asn = active.Asn, ProjectName = active.Name,
+                StartLocal = startUtc.ToLocalTime(), EndLocal = DateTime.Now,
+                DurationSeconds = A.Tracker.CurrentElapsedSeconds, Notes = "",
+            };
+            todayBlocks.Add(liveBlock);
+            // Raw (unrounded) hours so the live segment grows smoothly every tick, rather than
+            // in the 6-minute jumps DurationHours' 0.1h rounding would otherwise produce.
+            weekTotal += liveBlock.DurationSeconds / 3600.0;
         }
         WeekTotalText.Text = $"{weekTotal:0.0} h";
 
         double w = ChartCard.ActualWidth > 40 ? ChartCard.ActualWidth - 40 : 820;
         double h = ChartCard.ActualHeight > 40 ? ChartCard.ActualHeight - 40 : 440;
-        SlideIn(BuildChart(byDay, lastActivity, w, h, today, liveCode), slideDirection);
+        SlideIn(BuildChart(byDay, liveBlock, w, h, today), slideDirection);
         RebuildLegend(byDay);
+    }
+
+    /// <summary>Hours contributed by one block to a chart total — the live block uses raw
+    /// (unrounded) elapsed time so its segment grows smoothly every tick; committed blocks use
+    /// the same 0.1h-rounded DurationHours the CSV/export already show.</summary>
+    private static double HoursOf(TimeBlock b, TimeBlock? liveBlock)
+        => ReferenceEquals(b, liveBlock) ? b.DurationSeconds / 3600.0 : b.DurationHours;
+
+    /// <summary>Blend a colour toward white by <paramref name="amount"/> (0..1) — used for the
+    /// live segment's border, a brighter tint of its own fill rather than an unrelated colour.</summary>
+    private static Color Lighten(Color c, double amount)
+    {
+        byte L(byte ch) => (byte)Math.Min(255, ch + (255 - ch) * amount);
+        return Color.FromRgb(L(c.R), L(c.G), L(c.B));
     }
 
     private static (double axisMax, double step) ComputeAxisScale(double rawMax)
     {
         double axisMax = Math.Max(4, Math.Ceiling(rawMax / 2.0) * 2.0);
         return (axisMax, axisMax / 4.0);
-    }
-
-    /// <summary>Subtle top-lit vertical sheen over the segment's own colour, instead of a flat fill.</summary>
-    private static Brush BuildBarGradient(Color baseColor)
-    {
-        Color Lighten(Color c, double amount)
-        {
-            byte L(byte ch) => (byte)Math.Min(255, ch + (255 - ch) * amount);
-            return Color.FromRgb(L(c.R), L(c.G), L(c.B));
-        }
-        var brush = new LinearGradientBrush
-        {
-            StartPoint = new Point(0, 0),
-            EndPoint = new Point(0, 1),
-            GradientStops = { new GradientStop(Lighten(baseColor, 0.22), 0.0), new GradientStop(baseColor, 1.0) },
-        };
-        brush.Freeze();
-        return brush;
-    }
-
-    /// <summary>Repeating diagonal-stripe texture used to mark the still-running segment.</summary>
-    private static Brush BuildStripeBrush(Color stripeColor, double opacity)
-    {
-        var pen = new Pen(new SolidColorBrush(Color.FromArgb((byte)(opacity * 255), stripeColor.R, stripeColor.G, stripeColor.B)), 3);
-        var drawing = new GeometryDrawing { Pen = pen, Geometry = new LineGeometry(new Point(0, 10), new Point(10, 0)) };
-        var brush = new DrawingBrush
-        {
-            Drawing = drawing, TileMode = TileMode.Tile,
-            Viewport = new Rect(0, 0, 10, 10), ViewportUnits = BrushMappingMode.Absolute,
-        };
-        brush.Freeze();
-        return brush;
     }
 
     private static string FormatWeekLabel(DateTime weekStart)
@@ -346,50 +327,107 @@ public partial class TimesheetWindow : Window
     /// Settings.ChartMinSegmentHours).</summary>
     private sealed record ChartSegment(string Label, string? Asn, double Hours, Brush Fill, string Tooltip, DateTime OrderKey, bool IsLive = false);
 
+    /// <summary>A run of one or more blocks accumulated into a single candidate segment, before
+    /// the below-threshold ones get folded into "Other".</summary>
+    private sealed class SessionGroup
+    {
+        public required string ProjectCode;
+        public double Hours;
+        public DateTime Latest = DateTime.MinValue;
+        public bool ContainsLive;
+        public string? Note;
+    }
+
     /// <summary>
-    /// Splits a day's per-project hours into individually-drawable segments, folding anything
-    /// under the configured threshold into one neutral "Other" segment (its tooltip lists the
-    /// exact breakdown, so nothing is actually hidden — just visually consolidated). Ordered by
-    /// each segment's most-recent activity (ascending), so the stack builds bottom-up with the
-    /// most-recently-touched project ending up on top — a project worked early and then again
-    /// later in the day floats up with it, rather than staying pinned low from its first touch.
-    /// liveCode (only meaningful for today) is exempt from folding — hiding the currently-
-    /// recording project inside "Other" would defeat the point of highlighting it as live.
+    /// Groups a day's blocks into candidate segments, then folds anything under the configured
+    /// threshold into one neutral "Other" segment (its tooltip lists the exact breakdown, so
+    /// nothing is actually hidden — just visually consolidated). Ordered by each segment's
+    /// most-recent activity (ascending), so the stack builds bottom-up with the most-recently-
+    /// touched one ending up on top. liveBlock (only meaningful for today) is exempt from
+    /// folding — hiding the currently-recording session inside "Other" would defeat the point of
+    /// highlighting it as live.
+    ///
+    /// Grouping itself follows Settings.ChartMergeAllSessions: when true, every block for a
+    /// project that day sums into one segment regardless of gaps or notes (a project worked at
+    /// 8am and again at 2pm still ends up as a single bar). When false, only strictly
+    /// back-to-back blocks (nothing else logged between them) sharing the same project and note
+    /// collapse together — touching the same project again later, or with a different note,
+    /// starts a fresh segment of its own.
     /// </summary>
-    private List<ChartSegment> BuildDaySegments(Dictionary<string, double> perProject, Dictionary<string, DateTime> lastActivity,
-        IReadOnlyList<Project> projects, Brush otherFill, string? liveCode)
+    private List<ChartSegment> BuildDaySegments(List<TimeBlock> dayBlocks, IReadOnlyList<Project> projects,
+        Brush otherFill, TimeBlock? liveBlock)
     {
         double minHours = A.Settings.ChartMinSegmentHours;
+        var groups = new List<SessionGroup>();
+
+        if (A.Settings.ChartMergeAllSessions)
+        {
+            var byCode = new Dictionary<string, SessionGroup>(StringComparer.OrdinalIgnoreCase);
+            foreach (var b in dayBlocks)
+            {
+                if (!byCode.TryGetValue(b.ProjectCode, out var g))
+                {
+                    g = new SessionGroup { ProjectCode = b.ProjectCode };
+                    byCode[b.ProjectCode] = g;
+                    groups.Add(g);
+                }
+                g.Hours += HoursOf(b, liveBlock);
+                if (b.EndLocal > g.Latest) g.Latest = b.EndLocal;
+                if (ReferenceEquals(b, liveBlock)) g.ContainsLive = true;
+            }
+        }
+        else
+        {
+            SessionGroup? cur = null;
+            foreach (var b in dayBlocks) // already sorted chronologically by the caller
+            {
+                string note = b.Notes ?? "";
+                bool continuesRun = cur is not null
+                    && string.Equals(cur.ProjectCode, b.ProjectCode, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(cur.Note, note, StringComparison.Ordinal);
+                if (!continuesRun)
+                {
+                    cur = new SessionGroup { ProjectCode = b.ProjectCode, Note = note };
+                    groups.Add(cur);
+                }
+                cur!.Hours += HoursOf(b, liveBlock);
+                if (b.EndLocal > cur.Latest) cur.Latest = b.EndLocal;
+                if (ReferenceEquals(b, liveBlock)) cur.ContainsLive = true;
+            }
+        }
+
         var kept = new List<ChartSegment>();
         var folded = new List<(string Code, double Hours)>();
         double foldedTotal = 0;
         DateTime foldedLatest = DateTime.MinValue;
 
-        foreach (var (code, hrs) in perProject)
+        foreach (var g in groups)
         {
-            if (hrs <= 0) continue;
-            var p = projects.FirstOrDefault(x => string.Equals(x.Code, code, StringComparison.OrdinalIgnoreCase));
-            var latest = lastActivity.TryGetValue(code, out var t) ? t : DateTime.MinValue;
-            bool isLive = liveCode is not null && string.Equals(code, liveCode, StringComparison.OrdinalIgnoreCase);
-
+            if (g.Hours <= 0) continue;
+            var p = projects.FirstOrDefault(x => string.Equals(x.Code, g.ProjectCode, StringComparison.OrdinalIgnoreCase));
             if (p is null) continue; // project since deleted from the list; historical data stays in the CSV
 
-            if (hrs < minHours && !isLive)
+            if (g.Hours < minHours && !g.ContainsLive)
             {
-                folded.Add((code, hrs));
-                foldedTotal += hrs;
-                if (latest > foldedLatest) foldedLatest = latest;
+                folded.Add((g.ProjectCode, g.Hours));
+                foldedTotal += g.Hours;
+                if (g.Latest > foldedLatest) foldedLatest = g.Latest;
                 continue;
             }
 
+            string tooltip = g.ContainsLive
+                ? $"{p.Code} · ASN {p.Asn} · {g.Hours:0.0} h · recording now"
+                : $"{p.Code} · ASN {p.Asn} · {g.Hours:0.0} h";
+            if (!string.IsNullOrWhiteSpace(g.Note)) tooltip += $"\nNote: {g.Note}";
+
             kept.Add(new ChartSegment(
-                Label: $"{p.Code} · {hrs:0.#}h",
+                Label: $"{p.Code} · {g.Hours:0.#}h",
                 Asn: p.Asn,
-                Hours: hrs,
+                Hours: g.Hours,
                 Fill: ColorUtil.Brush(p.Color),
-                Tooltip: isLive ? $"{p.Code} · ASN {p.Asn} · {hrs:0.0} h · recording now" : $"{p.Code} · ASN {p.Asn} · {hrs:0.0} h",
-                OrderKey: latest,
-                IsLive: isLive));
+                Tooltip: tooltip,
+                OrderKey: g.Latest,
+                IsLive: g.ContainsLive));
         }
 
         if (folded.Count > 0)
@@ -400,19 +438,18 @@ public partial class TimesheetWindow : Window
                 Asn: null,
                 Hours: foldedTotal,
                 Fill: otherFill,
-                Tooltip: $"Other ({folded.Count} project{(folded.Count == 1 ? "" : "s")}) · {foldedTotal:0.0} h\n{breakdown}",
+                Tooltip: $"Other ({folded.Count} entr{(folded.Count == 1 ? "y" : "ies")}) · {foldedTotal:0.0} h\n{breakdown}",
                 OrderKey: foldedLatest));
         }
 
         return kept.OrderBy(s => s.OrderKey).ToList();
     }
 
-    private FrameworkElement BuildChart(Dictionary<DateTime, Dictionary<string, double>> byDay,
-        Dictionary<DateTime, Dictionary<string, DateTime>> lastActivity, double width, double height,
-        DateTime today, string? liveCode)
+    private FrameworkElement BuildChart(Dictionary<DateTime, List<TimeBlock>> byDay, TimeBlock? liveBlock,
+        double width, double height, DateTime today)
     {
         var projects = A.Tracker.Projects;
-        double rawMax = byDay.Values.Select(d => d.Values.Sum()).DefaultIfEmpty(0).Max();
+        double rawMax = byDay.Values.Select(day => day.Sum(b => HoursOf(b, liveBlock))).DefaultIfEmpty(0).Max();
         var (axisMax, step) = ComputeAxisScale(rawMax);
 
         const double yAxisW = 40;
@@ -472,12 +509,12 @@ public partial class TimesheetWindow : Window
                 canvas.Children.Add(hl);
             }
 
-            // Stack bottom-up ordered by each project's most-recent activity that day (folded
-            // "Other" entries use their latest constituent's activity) — the block list is
-            // otherwise just an unordered dictionary — so the most-recently-touched project
-            // (including the live one, whose "activity" is always right now) ends up on top.
-            var segments = BuildDaySegments(byDay[day], lastActivity[day], projects, otherFill: faintBrush,
-                liveCode: day == today ? liveCode : null);
+            // Stack bottom-up ordered by each segment's most-recent activity that day (folded
+            // "Other" entries use their latest constituent's activity) — so the most-recently-
+            // touched one (including the live one, whose "activity" is always right now) ends
+            // up on top.
+            var segments = BuildDaySegments(byDay[day], projects, otherFill: faintBrush,
+                liveBlock: day == today ? liveBlock : null);
 
             double yCursor = plotH;
             const double segGap = 2; // a small gap between stacked segments reads less "blocky"
@@ -489,36 +526,28 @@ public partial class TimesheetWindow : Window
                 var seg = new Border
                 {
                     Width = barW, Height = segH,
-                    Background = BuildBarGradient(baseColor),
+                    Background = seg0.Fill,
                     CornerRadius = new CornerRadius(4),
                     ToolTip = seg0.Tooltip,
                     ClipToBounds = true,
                 };
                 // The still-running segment gets its own outline regardless of height — a border
                 // reads even on a 2px-tall sliver, unlike text, so it's the primary "this one's
-                // live" cue; the striped overlay and label below add further reinforcement once
-                // there's room for them.
+                // live" cue; the pulsing dot next to the label below adds further reinforcement
+                // once there's room for it. The border is a brighter tint of the segment's OWN
+                // colour, not the unrelated red "Live" accent — an orange/red ring around e.g. a
+                // green bar read as a mismatched box slapped on top rather than a highlighted
+                // version of the same project.
                 if (seg0.IsLive)
                 {
-                    seg.BorderBrush = (Brush)FindResource("Live");
+                    var liveBorder = new SolidColorBrush(Lighten(baseColor, 0.4));
+                    seg.BorderBrush = liveBorder;
                     seg.BorderThickness = new Thickness(2);
+                    liveBorder.BeginAnimation(SolidColorBrush.OpacityProperty, new DoubleAnimation(0.55, 1.0, TimeSpan.FromMilliseconds(900))
+                    { EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut } });
                 }
 
                 var content = new Grid();
-
-                if (seg0.IsLive)
-                {
-                    // A diagonal-stripe texture (the classic "still in progress" motif — think
-                    // Google Calendar's tentative-event striping) over the segment's own colour,
-                    // not replacing it. The gentle opacity pulse is deliberately re-triggered
-                    // fresh on every render rather than looped: this window already rebuilds the
-                    // live segment every second to grow it, so a self-looping animation would
-                    // restart jarringly out of sync anyway — this way the "breathe" is the redraw.
-                    var stripe = new Rectangle { Fill = BuildStripeBrush(Colors.White, 0.16), IsHitTestVisible = false };
-                    stripe.BeginAnimation(OpacityProperty, new DoubleAnimation(0.35, 0.85, TimeSpan.FromMilliseconds(850))
-                    { EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut } });
-                    content.Children.Add(stripe);
-                }
 
                 // Only label the segment in-place if it's tall enough to hold readable text;
                 // short segments keep the tooltip as their only label. Hours always pairs with
@@ -530,12 +559,40 @@ public partial class TimesheetWindow : Window
                 {
                     var ink = new SolidColorBrush(SystemAccent.ReadableInk(baseColor));
                     var labels = new StackPanel { VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(6, 4, 6, 2) };
-                    labels.Children.Add(new TextBlock
+
+                    if (seg0.IsLive)
                     {
-                        Text = seg0.IsLive ? seg0.Label + "  ● LIVE" : seg0.Label,
-                        FontSize = 11, FontWeight = FontWeights.SemiBold, Foreground = ink,
-                        TextTrimming = TextTrimming.CharacterEllipsis,
-                    });
+                        var titleRow = new StackPanel { Orientation = Orientation.Horizontal };
+                        titleRow.Children.Add(new TextBlock
+                        {
+                            Text = seg0.Label, FontSize = 11, FontWeight = FontWeights.SemiBold, Foreground = ink,
+                            TextTrimming = TextTrimming.CharacterEllipsis,
+                        });
+                        var dot = new TextBlock
+                        {
+                            Text = "  ●", FontSize = 11, FontWeight = FontWeights.SemiBold, Foreground = ink,
+                        };
+                        // A small pulsing dot next to the label — not a full-surface texture —
+                        // is the "still recording" cue, matching how the rest of the app marks
+                        // "live" (the REC badge, the switcher's LIVE row) with a small accent
+                        // glyph rather than dressing up the whole surface. One-shot rather than
+                        // looped: this window already rebuilds the live segment every second to
+                        // grow it, so a self-looping animation would restart out of sync anyway —
+                        // the redraw itself is what makes it "breathe".
+                        dot.BeginAnimation(OpacityProperty, new DoubleAnimation(1.0, 0.3, TimeSpan.FromMilliseconds(900))
+                        { EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut } });
+                        titleRow.Children.Add(dot);
+                        labels.Children.Add(titleRow);
+                    }
+                    else
+                    {
+                        labels.Children.Add(new TextBlock
+                        {
+                            Text = seg0.Label, FontSize = 11, FontWeight = FontWeights.SemiBold, Foreground = ink,
+                            TextTrimming = TextTrimming.CharacterEllipsis,
+                        });
+                    }
+
                     if (segH >= 36 && seg0.Asn is not null)
                     {
                         labels.Children.Add(new TextBlock
@@ -620,10 +677,10 @@ public partial class TimesheetWindow : Window
         old.BeginAnimation(OpacityProperty, new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(240)));
     }
 
-    private void RebuildLegend(Dictionary<DateTime, Dictionary<string, double>> byDay)
+    private void RebuildLegend(Dictionary<DateTime, List<TimeBlock>> byDay)
     {
         Legend.Children.Clear();
-        var active = new HashSet<string>(byDay.Values.SelectMany(d => d.Keys), StringComparer.OrdinalIgnoreCase);
+        var active = new HashSet<string>(byDay.Values.SelectMany(d => d.Select(b => b.ProjectCode)), StringComparer.OrdinalIgnoreCase);
 
         foreach (var p in A.Tracker.Projects)
         {

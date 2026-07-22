@@ -161,7 +161,16 @@
 
                     <!-- ===== Timesheet chart ===== -->
                     <TextBlock Text="TIMESHEET CHART" Style="{StaticResource EyebrowText}" Margin="0,0,0,4"/>
-                    <TextBlock Text="Groups a day's small segments into one &quot;Other&quot; bar (hover it for the exact breakdown). Display only — never changes recorded data or the IFS export."
+                    <TextBlock Text="Both settings below are display only — they never change recorded data or the IFS export, only how the chart draws it."
+                               FontSize="11" Foreground="{DynamicResource TextFaint}" TextWrapping="Wrap" Margin="0,0,0,10"/>
+
+                    <CheckBox x:Name="MergeSessionsCheck" Content="Merge every session for a project into one bar"
+                              Foreground="{DynamicResource Text}" FontSize="13" Margin="0,0,0,4"
+                              Checked="MergeSessionsCheck_Changed" Unchecked="MergeSessionsCheck_Changed"/>
+                    <TextBlock Text="Off: only back-to-back sessions with a matching note merge — the same project touched again later in the day gets its own bar."
+                               FontSize="11" Foreground="{DynamicResource TextFaint}" TextWrapping="Wrap" Margin="0,0,0,14"/>
+
+                    <TextBlock Text="Groups a day's small segments into one &quot;Other&quot; bar (hover it for the exact breakdown)."
                                FontSize="11" Foreground="{DynamicResource TextFaint}" TextWrapping="Wrap" Margin="0,0,0,10"/>
                     <Slider x:Name="DensitySlider" Style="{StaticResource DensitySliderStyle}"
                             ValueChanged="DensitySlider_ValueChanged"/>

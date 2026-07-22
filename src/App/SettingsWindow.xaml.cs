@@ -17,6 +17,7 @@ public partial class SettingsWindow : Window
     private readonly List<MappingEntry> _mapping;              // working copy
     private DateTime _exportMonth = new(DateTime.Today.Year, DateTime.Today.Month, 1);
     private double _chartMinSegmentHours;
+    private bool _chartMergeAllSessions;
     private bool _closingConfirmed;                            // set once Save/Discard has resolved, so OnClosing doesn't re-prompt
 
     public SettingsWindow()
@@ -34,6 +35,8 @@ public partial class SettingsWindow : Window
         DataFolderText.Text = A.Paths.DataFolder;
         DataOverrideBox.Text = s.DataFolderOverride ?? "";
         _chartMinSegmentHours = s.ChartMinSegmentHours;
+        _chartMergeAllSessions = s.ChartMergeAllSessions;
+        MergeSessionsCheck.IsChecked = _chartMergeAllSessions;
 
         _projects = A.Tracker.Projects.Select(Clone).ToList();
         _mapping = s.IfsExportMapping.Select(m => new MappingEntry { Header = m.Header, Field = m.Field }).ToList();
@@ -78,6 +81,9 @@ public partial class SettingsWindow : Window
 
     private void RefreshDensityLabel(int idx)
         => DensityValueText.Text = DensityPresets[idx] <= 0 ? "Off" : $"Fold under {DensityPresets[idx]:0.##} h";
+
+    private void MergeSessionsCheck_Changed(object sender, RoutedEventArgs e)
+        => _chartMergeAllSessions = MergeSessionsCheck.IsChecked == true;
 
     private static Project Clone(Project p) => new() { Code = p.Code, Asn = p.Asn, Name = p.Name, Color = p.Color, Order = p.Order };
 
@@ -232,6 +238,7 @@ public partial class SettingsWindow : Window
         s.ExportDateFormat = string.IsNullOrWhiteSpace(DateFormatBox.Text) ? s.ExportDateFormat : DateFormatBox.Text;
         s.IfsExportMapping = _mapping.Where(m => !string.IsNullOrWhiteSpace(m.Header)).ToList();
         s.ChartMinSegmentHours = _chartMinSegmentHours;
+        s.ChartMergeAllSessions = _chartMergeAllSessions;
         A.Store.SaveSettings(s);
         A.RefreshIdleThreshold();
 
@@ -249,25 +256,26 @@ public partial class SettingsWindow : Window
 
     protected override void OnClosing(CancelEventArgs e)
     {
+        // Resolve the outcome and set e.Cancel (at most) once for THIS close pass, rather than
+        // cancelling it and then calling Close() again from inside the handler — a recursive
+        // Close() while still inside this window's own Closing callback re-enters WPF's closing
+        // machinery on the same window and crashed instead of throwing anything catchable.
         if (!_closingConfirmed && HasUnsavedChanges())
         {
-            e.Cancel = true;
             switch (UnsavedChangesPrompt.Ask(this))
             {
                 case UnsavedChangesResult.Save:
-                    _closingConfirmed = true;
                     SaveToSettings();
-                    Close();
+                    _closingConfirmed = true;
                     break;
                 case UnsavedChangesResult.Discard:
                     _closingConfirmed = true;
-                    Close();
                     break;
                 case UnsavedChangesResult.Cancel:
                 default:
-                    break; // stay open
+                    e.Cancel = true;
+                    break;
             }
-            return;
         }
 
         base.OnClosing(e);
@@ -288,6 +296,7 @@ public partial class SettingsWindow : Window
         if (overrideText != s.DataFolderOverride) return true;
 
         if (_chartMinSegmentHours != s.ChartMinSegmentHours) return true;
+        if (_chartMergeAllSessions != s.ChartMergeAllSessions) return true;
         if (!ProjectsEqual(_projects, A.Tracker.Projects)) return true;
         if (!MappingEqual(_mapping, s.IfsExportMapping)) return true;
 

@@ -65,4 +65,14 @@ public sealed class Settings
     /// only how the chart draws it.
     /// </summary>
     public double ChartMinSegmentHours { get; set; } = 0.25;
+
+    /// <summary>
+    /// Timesheet chart display-only grouping: when true (default), every session for a project
+    /// on a given day is summed into one bar segment, regardless of gaps or notes — the original
+    /// behaviour. When false, only strictly back-to-back sessions (nothing else logged between
+    /// them) with the same note collapse together; the same project touched again later in the
+    /// day, or with a different note, gets its own separate segment in the stack. Never affects
+    /// recorded data or the IFS export, only how the chart draws it.
+    /// </summary>
+    public bool ChartMergeAllSessions { get; set; } = true;
 }
