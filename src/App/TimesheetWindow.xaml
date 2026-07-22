@@ -3,6 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         Title="Timesheets — IFS Time Tracker"
+        Icon="Assets/time_tracker.ico"
         Width="920" Height="640" MinWidth="640" MinHeight="440"
         WindowStyle="None" ResizeMode="CanResize" ShowInTaskbar="True"
         Background="{DynamicResource Bg}" FontFamily="{StaticResource UiFont}"

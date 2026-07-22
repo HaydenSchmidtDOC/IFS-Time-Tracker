@@ -1,0 +1,17 @@
+<svg width="256" height="256" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
+<!-- Col 1 -->
+<rect x="23" y="23" width="34" height="76" rx="17" fill="#ffffff"/>
+<rect x="23" y="109" width="34" height="124" rx="17" fill="#ffffff"/>
+<!-- Col 2 -->
+<rect x="67" y="23" width="34" height="140" rx="17" fill="#ffffff"/>
+<rect x="67" y="173" width="34" height="60" rx="17" fill="#ffffff"/>
+<!-- Col 3 -->
+<rect x="111" y="23" width="34" height="44" rx="17" fill="#ffffff"/>
+<rect x="111" y="77" width="34" height="156" rx="17" fill="#ffffff"/>
+<!-- Col 4 -->
+<rect x="155" y="23" width="34" height="112" rx="17" fill="#ffffff"/>
+<rect x="155" y="145" width="34" height="88" rx="17" fill="#ffffff"/>
+<!-- Col 5 -->
+<rect x="199" y="23" width="34" height="150" rx="17" fill="#ffffff"/>
+<rect x="199" y="183" width="34" height="50" rx="17" fill="#ffffff"/>
+</svg>

@@ -12,13 +12,21 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <!-- Per-monitor DPI so the pill and switcher render crisply on any display. -->
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
-    <Version>0.1.0</Version>
+    <Version>0.1.1</Version>
     <Product>IFS Time Tracker</Product>
     <Company>Daifuku Oceania</Company>
+    <ApplicationIcon>Assets\time_tracker.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Core\TimeTracker.Core.csproj" />
+  </ItemGroup>
+
+  <!-- Also exposed as a WPF Resource (separate embedding path from ApplicationIcon above,
+       which only bakes the .exe's own native icon) so Window.Icon="Assets/..." can load it
+       at runtime for the taskbar/Alt-Tab thumbnail. -->
+  <ItemGroup>
+    <Resource Include="Assets\time_tracker.ico" />
   </ItemGroup>
 
   <!-- UseWPF + UseWindowsForms both implicitly global-`using` their namespaces, which collide

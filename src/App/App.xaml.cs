@@ -1,3 +1,4 @@
+using System.IO;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -48,6 +49,14 @@ public partial class App : Application
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+
+        // Last-resort safety net: WPF kills the whole process on any unhandled exception on the
+        // UI thread by default, with no dialog and nothing to diagnose from afterwards. For a
+        // time tracker that's a real cost beyond the crash itself — an active tracking session
+        // dies with it. Logging + staying open trades "might be in a slightly odd state" for
+        // "definitely didn't just lose your running timer", which is the right side to err on
+        // here; it isn't a substitute for fixing the underlying bug.
+        DispatcherUnhandledException += OnDispatcherUnhandledException;
 
         _instanceMutex = new Mutex(true, "TimeTracker.SingleInstance", out bool isNew);
         _ownsInstanceMutex = isNew;
@@ -320,5 +329,24 @@ public partial class App : Application
         if (_ownsInstanceMutex) _instanceMutex?.ReleaseMutex();
         _instanceMutex?.Dispose();
         base.OnExit(e);
+    }
+
+    private void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
+    {
+        try
+        {
+            var dir = Paths?.DataFolder ?? AppContext.BaseDirectory;
+            var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {e.Exception}\n\n";
+            File.AppendAllText(Path.Combine(dir, "crash.log"), line);
+        }
+        catch { /* logging must never be what actually crashes the app */ }
+
+        MessageBox.Show(
+            $"Something went wrong, and it's been written to crash.log in the data folder.\n\n" +
+            "The app is staying open so you don't lose an active tracking session — but if things " +
+            "look off, it's worth saving your work and restarting.\n\n" + e.Exception.Message,
+            "IFS Time Tracker — unexpected error", MessageBoxButton.OK, MessageBoxImage.Warning);
+
+        e.Handled = true;
     }
 }
