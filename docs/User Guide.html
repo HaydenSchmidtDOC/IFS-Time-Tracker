@@ -233,7 +233,7 @@
 
   /* settings mini-list */
   .settings-grid {
-    display: grid; grid-template-columns: 1fr 1fr; gap: 10px 20px;
+    display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px 20px;
     margin-top: 12px;
   }
   .settings-grid .sec {
@@ -261,10 +261,11 @@
   </div>
   <h1>IFS Time Tracker</h1>
   <p class="tagline">Track hours against IFS projects without leaving your desktop.</p>
-  <span class="beta-chip">Beta build · quick guide</span>
+  <span class="beta-chip">v0.2.0 Beta · quick guide</span>
 </header>
 
 <nav class="toc">
+  <a href="#whatsnew">What's new</a>
   <a href="#start">Getting started</a>
   <a href="#basics">The basics</a>
   <a href="#switcher">Quick switcher</a>
@@ -277,6 +278,31 @@
 </nav>
 
 <div class="wrap">
+
+  <section id="whatsnew">
+    <h2>New in v0.2.0</h2>
+    <h3>The timesheet view got a lot more capable</h3>
+    <p class="lede">Worth a skim before you dive back in — most of this round's changes are in Timesheets.</p>
+
+    <ul class="list">
+      <li><b>Calendar view</b> — an hour-by-hour day view next to the existing bar chart, switched with the <b>Totals / Calendar</b> toggle in the Timesheets header.</li>
+      <li><b>Add time by hand</b> — the <b>＋</b> button (or double-clicking blank space in Calendar view) logs a block you forgot to start live, either by amount or by exact start/end times.</li>
+      <li><b>Edit a block</b> — click it in Calendar view to correct its project, start, or end time.</li>
+      <li><b>Delete a block</b> — hover it in Calendar view for a small <b>✕</b> (confirms before deleting), or delete from within the edit dialog if it's too small to show that.</li>
+      <li><b>Drag to resize or move</b> — drag a block's edge to resize it, or its body to move it, including past other blocks into an open gap and onto a different day.</li>
+      <li><b>Light/dark mode and your accent colour now follow Windows live</b> — no restart needed if you switch themes.</li>
+      <li><b>ASN is optional</b> when adding a project now, and code/name/ASN can all be edited afterwards.</li>
+      <li><b>Timesheet-view settings moved</b> — snap distances, default view, and chart grouping now live in one popover: the <b>⚙</b> in the bottom-right corner of the Timesheets chart, not the main Settings window.</li>
+    </ul>
+
+    <p style="margin-top:18px"><b>Also fixed:</b> adding or editing time while a session is live no longer risks double-booking that stretch of time, and a couple of animation glitches (the "recording" pulse, the Totals/Calendar toggle) are smoother now.</p>
+
+    <div class="callout beta">
+      <h4>Known limitations</h4>
+      <p><b>No undo yet.</b> Deleting or dragging a block applies immediately — a bad drop or misclick means fixing it by hand. Your data folder's OneDrive file history is a partial safety net in the meantime, but it's worth being a little careful.</p>
+      <p>A block can't be dragged across a month boundary (e.g. the last day of one month onto the 1st of the next) — that specific move is quietly rejected rather than applied.</p>
+    </div>
+  </section>
 
   <section id="start">
     <h2>01</h2>
@@ -436,7 +462,7 @@
       <li><b>Move between weeks</b> with the arrow buttons, the on-screen arrows, or your scroll wheel/trackpad.</li>
       <li>Each day's bar stacks segments <b>most-recently-worked on top</b>, so whatever you're doing right now is easiest to spot.</li>
       <li>The <b>live segment</b> (today, if you're currently tracking) gets a solid outline and a small pulsing dot next to its label, so it reads as "still going" at a glance.</li>
-      <li>By default every session for a project on a day is <b>merged into one bar</b> — a setting in Settings → Timesheet chart can switch this so only back-to-back sessions with a matching note merge, and the same project touched again later shows as its own separate segment.</li>
+      <li>By default every session for a project on a day is <b>merged into one bar</b> — a setting in the Timesheets ⚙ popover (bottom-right of the chart) can switch this so only back-to-back sessions with a matching note merge, and the same project touched again later shows as its own separate segment.</li>
       <li><b>Click a day</b> to open its individual time blocks — each one can be deleted (with a confirm step) if you logged something by mistake.</li>
       <li>Very short segments get folded into a neutral "Other" bucket so the chart doesn't get cluttered — hover it for the breakdown. This only changes how the chart <i>looks</i>; it never touches your recorded data or the IFS export.</li>
     </ul>
@@ -459,11 +485,8 @@
         <h5>Data location</h5>
         <p>Shows where your data lives (this OneDrive folder, by default — that's what makes it sync) and lets you point it elsewhere if needed.</p>
       </div>
-      <div class="sec">
-        <h5>Timesheet chart</h5>
-        <p>Whether same-project sessions merge into one bar or stay separate, plus a slider for how small a segment has to be before it folds into "Other". Both display-only.</p>
-      </div>
     </div>
+    <p style="margin-top:14px">Timesheet-view settings — snap distances, default view, chart grouping, and the small-segment fold threshold — live in their own popover instead: the <b>⚙</b> in the bottom-right corner of the Timesheets chart. They apply immediately as you change them, no Save button.</p>
   </section>
 
   <section id="export">
