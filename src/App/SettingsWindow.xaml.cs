@@ -22,6 +22,9 @@ public partial class SettingsWindow : Window
     {
         InitializeComponent();
 
+        var version = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
+        VersionText.Text = version is null ? "" : $"IFS Time Tracker v{version.Major}.{version.Minor}.{version.Build}";
+
         var s = A.Settings;
         PromptNoteCheck.IsChecked = s.PromptForNote;
         ShowPillCheck.IsChecked = s.PillVisible;

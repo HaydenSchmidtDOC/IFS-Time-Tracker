@@ -180,7 +180,11 @@ public partial class TimesheetWindow : Window
     // is a pure RenderTransform (scale + translate) + Opacity on the content — fully
     // GPU-composited, no native resize involved at all.
 
-    /// <summary>Grow from origin's exact bounds to a comfortable size centred on it.</summary>
+    /// <summary>Open, centred on origin. See the XAML remarks on RootGrid for why this is a plain
+    /// content-level fade + scale-settle rather than a "grows out of the button it was opened
+    /// from" effect — two attempts at that were each smooth in isolation but broken in
+    /// combination with something this window genuinely needs (real native resize/Aero-Snap, and
+    /// a MinWidth its header/chart aren't laid out to gracefully shrink past).</summary>
     public void AnimateOpenFrom(Window origin)
     {
         var wa = WorkAreaFor(origin);
@@ -188,25 +192,21 @@ public partial class TimesheetWindow : Window
         double targetH = Math.Min(680, wa.Height - 80);
         double targetLeft = Clamp(origin.Left + origin.Width / 2 - targetW / 2, wa.Left + 16, wa.Right - targetW - 16);
         double targetTop = Clamp(origin.Top + origin.Height / 2 - targetH / 2, wa.Top + 16, wa.Bottom - targetH - 16);
+        // Bounds are set ONCE, to their final value, never animated — see the XAML remarks.
         Left = targetLeft; Top = targetTop; Width = targetW; Height = targetH;
 
-        // Start the transform so the content appears at origin's screen rect, then animate to identity.
-        double sx = origin.Width / targetW, sy = origin.Height / targetH;
-        double tx = origin.Left - targetLeft, ty = origin.Top - targetTop;
-        ScaleXform.ScaleX = sx; ScaleXform.ScaleY = sy;
-        TranslateXform.X = tx; TranslateXform.Y = ty;
-        Opacity = 0;
+        // Chart area only — see the XAML remarks on why the header strip is excluded and just
+        // appears instantly instead.
+        ChartArea.Opacity = 0;
+        ScaleXform.ScaleX = 0.96; ScaleXform.ScaleY = 0.96;
 
         Show();
         Activate();
 
-        var dur = TimeSpan.FromMilliseconds(320);
         var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
-        ScaleXform.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(sx, 1, dur) { EasingFunction = ease });
-        ScaleXform.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(sy, 1, dur) { EasingFunction = ease });
-        TranslateXform.BeginAnimation(TranslateTransform.XProperty, new DoubleAnimation(tx, 0, dur) { EasingFunction = ease });
-        TranslateXform.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(ty, 0, dur) { EasingFunction = ease });
-        BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(240)));
+        ChartArea.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(180)));
+        ScaleXform.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(0.96, 1, TimeSpan.FromMilliseconds(220)) { EasingFunction = ease });
+        ScaleXform.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(0.96, 1, TimeSpan.FromMilliseconds(220)) { EasingFunction = ease });
 
         _weekStart = StartOfWeek(DateTime.Today);
         // The window is reused across opens, so a stale cache from the last time it was open
@@ -220,34 +220,25 @@ public partial class TimesheetWindow : Window
         _calendarScrollOffset = null;
         CalendarPxPerHour = 60;
         _viewToggle.SetIndex(_viewMode == ViewMode.Calendar ? 1 : 0, animate: false);
-        RenderCurrentWeek(0);
+        RenderCurrentWeek(0); // bounds are already final, so this renders at the correct size immediately
     }
 
-    /// <summary>Shrink back toward target's current bounds, then hide and hand control back.</summary>
+    /// <summary>Fade/settle back out, then hide and hand control back.</summary>
     public void AnimateCloseTo(Window target, Action onDone)
     {
-        double sx = target.Width / Width, sy = target.Height / Height;
-        double tx = target.Left - Left, ty = target.Top - Top;
-
-        var dur = TimeSpan.FromMilliseconds(260);
-        var ease = new CubicEase { EasingMode = EasingMode.EaseIn };
-        var fade = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(240));
-        fade.Completed += (_, _) =>
+        var fadeOut = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(160)) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseIn } };
+        fadeOut.Completed += (_, _) =>
         {
             Hide();
             // Reset so the next AnimateOpenFrom starts clean.
-            ScaleXform.BeginAnimation(ScaleTransform.ScaleXProperty, null); ScaleXform.ScaleX = 1;
-            ScaleXform.BeginAnimation(ScaleTransform.ScaleYProperty, null); ScaleXform.ScaleY = 1;
-            TranslateXform.BeginAnimation(TranslateTransform.XProperty, null); TranslateXform.X = 0;
-            TranslateXform.BeginAnimation(TranslateTransform.YProperty, null); TranslateXform.Y = 0;
+            ChartArea.Opacity = 1;
+            ScaleXform.ScaleX = 1; ScaleXform.ScaleY = 1;
             onDone();
         };
-
-        ScaleXform.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(1, sx, dur) { EasingFunction = ease });
-        ScaleXform.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(1, sy, dur) { EasingFunction = ease });
-        TranslateXform.BeginAnimation(TranslateTransform.XProperty, new DoubleAnimation(0, tx, dur) { EasingFunction = ease });
-        TranslateXform.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(0, ty, dur) { EasingFunction = ease });
-        BeginAnimation(OpacityProperty, fade);
+        ChartArea.BeginAnimation(OpacityProperty, fadeOut);
+        var shrinkEase = new CubicEase { EasingMode = EasingMode.EaseIn };
+        ScaleXform.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(1, 0.96, TimeSpan.FromMilliseconds(180)) { EasingFunction = shrinkEase });
+        ScaleXform.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(1, 0.96, TimeSpan.FromMilliseconds(180)) { EasingFunction = shrinkEase });
     }
 
     /// <summary>Working area (DIP) of whichever monitor window w is currently centred on.
@@ -902,6 +893,34 @@ public partial class TimesheetWindow : Window
                 yCursor -= segH + segGap;
             }
 
+            // A small "+" riding just above this day's bar — same Add dialog as the header's own
+            // "+" (Amount mode), just pre-set to this column's day instead of always today, the
+            // same way double-clicking blank space in Calendar view pre-sets the day it was
+            // clicked on. Positioned off yCursor, which this render just finished stacking down
+            // from plotH to the bar's current top — so on a live day it rides up with the bar as
+            // the running segment grows, rather than sitting at a fixed height.
+            var plusBtn = new Border
+            {
+                Width = 20, Height = 20, CornerRadius = new CornerRadius(10),
+                Background = (Brush)FindResource("Surface3"), Cursor = Cursors.Hand,
+                ToolTip = "Add time for this day",
+                Child = new TextBlock
+                {
+                    Text = "＋", FontSize = 11, FontWeight = FontWeights.SemiBold, Foreground = dimBrush,
+                    HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+                },
+            };
+            Canvas.SetLeft(plusBtn, cx - 10);
+            Canvas.SetTop(plusBtn, Math.Max(0, yCursor - 28));
+            var dayForAdd = day;
+            plusBtn.MouseLeftButtonUp += (_, e) =>
+            {
+                e.Handled = true;
+                bool added = AddTimeDialog.Ask(this, dayForAdd);
+                if (added) { _cachedWeekStart = null; RenderCurrentWeek(0); }
+            };
+            canvas.Children.Add(plusBtn);
+
             // Clickable — opens the day's individual blocks (view/delete). Kept off the bars
             // themselves so each segment's own hover tooltip isn't swallowed by a click target.
             var labelStack = new StackPanel
@@ -954,10 +973,24 @@ public partial class TimesheetWindow : Window
         const double xAxisH = 32; // matches BuildChart's day-label strip height
         double plotW = Math.Max(80, width - yAxisW);
         double gridHeight = 24 * CalendarPxPerHour;
-        // The day-header row is now a FIXED strip above the scrollable hour grid (see headerCanvas
-        // below), not part of the scrolling canvas — so the scrollable body only needs to fit the
-        // grid itself, and the ScrollViewer only gets what's left after that fixed strip.
-        double bodyHeight = Math.Max(40, height - xAxisH);
+
+        // Unscheduled ("by amount") entries render as small chips in the day header rather than
+        // in the timed grid (they have no clock position — see TimeBlock.Unscheduled). Reserving
+        // their height needs to happen before bodyHeight/headerCanvas below are sized, so it's
+        // computed straight off byDay rather than discovered mid-render — capped at a couple of
+        // rows so one day with a pile of them doesn't blow out every column's header height; any
+        // more collapse into a single "+N more" row.
+        const double chipRowH = 18;
+        const int maxChipRows = 2;
+        int maxUnscheduled = byDay.Values.Select(list => list.Count(b => b.Unscheduled)).DefaultIfEmpty(0).Max();
+        double chipAreaH = Math.Min(maxUnscheduled, maxChipRows) * chipRowH;
+        double headerH = xAxisH + chipAreaH;
+
+        // The day-header row is a FIXED strip, pinned at the bottom of the view (see the `root`
+        // Grid at the end of this method), not part of the scrolling canvas — so the scrollable
+        // body only needs to fit the grid itself, and the ScrollViewer only gets what's left
+        // after that fixed strip.
+        double bodyHeight = Math.Max(40, height - headerH);
 
         var canvas = new Canvas { Width = width, Height = gridHeight };
 
@@ -994,7 +1027,7 @@ public partial class TimesheetWindow : Window
         // scrolling all the way down just to see which column is which day). Populated per-day
         // inside the main loop below, alongside everything else that needs that same per-day
         // geometry.
-        var headerCanvas = new Canvas { Width = width, Height = xAxisH, Background = Brushes.Transparent };
+        var headerCanvas = new Canvas { Width = width, Height = headerH, Background = Brushes.Transparent };
 
         var gridBrush = (Brush)FindResource("Border");
         var faintBrush = (Brush)FindResource("TextFaint");
@@ -1140,6 +1173,10 @@ public partial class TimesheetWindow : Window
 
             foreach (var b in byDay[day])
             {
+                // Unscheduled ("by amount") entries have no real clock position — see
+                // TimeBlock.Unscheduled — so they don't belong in the timed grid at all; they're
+                // rendered as chips in the pinned day header instead, below.
+                if (b.Unscheduled) continue;
                 bool isLive = ReferenceEquals(b, liveBlock);
                 // A block that runs past this day's midnight has its Border's height clamped
                 // (below) to the visible 24:00 boundary purely for display — if it were dragged,
@@ -1339,6 +1376,50 @@ public partial class TimesheetWindow : Window
             Canvas.SetLeft(labelStack, colLeft);
             Canvas.SetTop(labelStack, 4);
             headerCanvas.Children.Add(labelStack);
+
+            // Unscheduled ("by amount") entries for this day — small chips stacked below the
+            // day name/number, capped at maxChipRows with a "+N more" summary beyond that (see
+            // chipAreaH above, which reserves exactly this many rows for every column).
+            var dayUnscheduled = byDay[day].Where(b => b.Unscheduled).ToList();
+            for (int ci = 0; ci < Math.Min(dayUnscheduled.Count, maxChipRows); ci++)
+            {
+                bool overflowRow = ci == maxChipRows - 1 && dayUnscheduled.Count > maxChipRows;
+                var ub = dayUnscheduled[ci];
+                var resolvedU = A.Tracker.FindByBlock(ub);
+                var chipColor = resolvedU is not null ? ColorUtil.Parse(resolvedU.Color) : ((SolidColorBrush)faintBrush).Color;
+
+                var chip = new Border
+                {
+                    Width = Math.Max(20, dayW - 8), Height = chipRowH - 3,
+                    CornerRadius = new CornerRadius(4),
+                    Background = new SolidColorBrush(Color.FromArgb(55, chipColor.R, chipColor.G, chipColor.B)),
+                    BorderBrush = new SolidColorBrush(chipColor), BorderThickness = new Thickness(1),
+                    Cursor = Cursors.Hand,
+                    ToolTip = overflowRow
+                        ? $"{dayUnscheduled.Count - maxChipRows + 1} more unscheduled entries that day"
+                        : $"{(resolvedU?.Code ?? ub.ProjectCode)} · {ub.DurationHours:0.0}h · no specific time",
+                };
+                chip.Child = new TextBlock
+                {
+                    Text = overflowRow ? $"+{dayUnscheduled.Count - maxChipRows + 1} more" : $"{(resolvedU?.Code ?? ub.ProjectCode)} · {ub.DurationHours:0.#}h",
+                    FontSize = 8.5, FontWeight = FontWeights.SemiBold, Foreground = dimBrush,
+                    HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                };
+                Canvas.SetLeft(chip, colLeft + 4);
+                Canvas.SetTop(chip, xAxisH + ci * chipRowH);
+                if (!overflowRow)
+                {
+                    var capturedUnscheduled = ub;
+                    chip.MouseLeftButtonUp += (_, e) =>
+                    {
+                        e.Handled = true;
+                        bool changed = AddTimeDialog.AskEdit(this, capturedUnscheduled);
+                        if (changed) { _cachedWeekStart = null; RenderCurrentWeek(0); }
+                    };
+                }
+                headerCanvas.Children.Add(chip);
+            }
         }
 
         // ==================== drag interaction (edge-resize / whole-block move) ====================
@@ -1610,7 +1691,7 @@ public partial class TimesheetWindow : Window
 
             if (ok)
             {
-                var updated = new TimeBlock { StartLocal = newStart, EndLocal = newEnd, Notes = d.Block.Notes };
+                var updated = new TimeBlock { StartLocal = newStart, EndLocal = newEnd, Notes = d.Block.Notes, Unscheduled = d.Block.Unscheduled };
                 A.Log.UpdateBlock(d.Block, updated);
 
                 // Only touch the neighbour's row if it was actually pushed — never encroaching
@@ -1618,7 +1699,7 @@ public partial class TimesheetWindow : Window
                 // recorded, so there's nothing to rewrite.
                 if (neighborChanged && d.Neighbor is not null)
                 {
-                    var nUpdated = new TimeBlock { StartLocal = neighborNewStart!.Value, EndLocal = neighborNewEnd!.Value, Notes = d.Neighbor.Notes };
+                    var nUpdated = new TimeBlock { StartLocal = neighborNewStart!.Value, EndLocal = neighborNewEnd!.Value, Notes = d.Neighbor.Notes, Unscheduled = d.Neighbor.Unscheduled };
                     A.Log.UpdateBlock(d.Neighbor, nUpdated);
                 }
             }
@@ -1711,7 +1792,7 @@ public partial class TimesheetWindow : Window
         // the view.
         var root = new Grid { Width = width, Height = height };
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-        root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(xAxisH) });
+        root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(headerH) });
         Grid.SetRow(scroll, 0);
         Grid.SetRow(headerCanvas, 1);
         root.Children.Add(headerCanvas);

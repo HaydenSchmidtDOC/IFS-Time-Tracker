@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.3.0] Beta — 2026-07-23
+
+### New
+
+- **"By amount" entries no longer need a clock time.** Adding time by amount now logs it as a
+  plain day + project + duration total, with no specific start/end — so it never has to fit in
+  whatever gap happens to be left in the day, and can never collide with anything. In Calendar
+  view these show as small chips under the day header (click to edit) instead of a positioned
+  block in the timed grid; Totals view needed no changes, since it was already duration-based.
+- **Tracking now protects itself against overlapping an existing entry.** Starting or switching
+  refuses (with an explanation) if "now" already falls inside a block you've already logged.
+  While a session is running, it's also checked continuously — if it grows into the start of a
+  block placed ahead of it, it stops right there instead of overlapping it, and tells you why.
+- Times-mode add/edit and dragging a block can now target the future (previously restricted) —
+  the two points above make that safe without needing that restriction.
+- **A small "+" above every day's bar in Totals view**, riding with the bar as it grows (e.g.
+  while a session is live), opening the Add dialog pre-set to that day.
+- The version number is now shown at the bottom of the Settings window.
+
+### Fixed
+
+- Fixed a crash when closing the Add-time dialog (Cancel, Add, Escape, or the delete confirm) —
+  the new click-off-to-dismiss behaviour below was re-entering `Close()` on a window already
+  closing.
+- The Add-time dialog now dismisses on an outside click, matching the Timesheet settings
+  popover's light-dismiss feel.
+- Reworked the Timesheets window's open/close animation after several rounds that each traded
+  one visual bug for another (see the code comments on `TimesheetWindow.AnimateOpenFrom` for the
+  full story). It's now a plain fade + subtle scale-settle on the chart area only — the header
+  bar stays static/instant, since animating a toolbar-like strip read as broken chrome rather
+  than smooth.
+
 ## [0.2.0] Beta — 2026-07-23
 
 ### New

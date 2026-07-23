@@ -58,6 +58,15 @@ public sealed class TimeBlock
     public long DurationSeconds { get; set; }
     public string Notes { get; set; } = "";
 
+    /// <summary>
+    /// True for a block added "by amount" with no specific clock time — StartLocal/EndLocal
+    /// still hold a nominal placeholder (midnight-anchored) so duration math, the month-file
+    /// lookup, and every existing consumer keep working unmodified; this flag is what tells the
+    /// calendar view (and anything doing overlap/collision checks) that the placeholder isn't a
+    /// real position and should be treated as "just a total for the day," not a time slot.
+    /// </summary>
+    public bool Unscheduled { get; set; }
+
     /// <summary>Elapsed hours rounded to 0.1 h (nearest 6 minutes) for IFS export.</summary>
     [JsonIgnore]
     public double DurationHours => Rounding.ToTenthHours(DurationSeconds);

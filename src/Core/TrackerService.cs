@@ -27,6 +27,21 @@ public sealed class TrackerService
     /// <summary>Raised after a block is banked to the log (so the UI can refresh totals).</summary>
     public event Action<TimeBlock>? BlockLogged;
 
+    /// <summary>
+    /// Raised when a start/switch was refused because "now" already collides with an existing
+    /// committed block — the UI shows an explanation instead of silently overlapping it. Not
+    /// raised for the ordinary "already tracking this project, no-op" case.
+    /// </summary>
+    public event Action<TimeBlock>? StartRefused;
+
+    /// <summary>
+    /// Raised when a live session was stopped early because it grew into the start of an
+    /// existing block placed ahead of it — the UI shows an explanation. This only ever fires from
+    /// <see cref="CheckForLiveCollision"/>, which the UI calls once a second; TrackerService
+    /// doesn't own a timer itself (matches Tick living in App, not here).
+    /// </summary>
+    public event Action<TimeBlock>? LiveSessionCollided;
+
     public TrackerService(JsonStore store, CsvLog log, Func<DateTime>? utcNow = null)
     {
         _store = store;
@@ -117,10 +132,13 @@ public sealed class TrackerService
         }
     }
 
-    /// <summary>Begin tracking a project. Auto-banks any running block first (with optional note).</summary>
+    /// <summary>Begin tracking a project. Auto-banks any running block first (with optional
+    /// note). Refuses (raising <see cref="StartRefused"/> instead) if "now" already falls inside
+    /// an existing committed block for today — starting anyway would immediately overlap it.</summary>
     public void StartOrSwitch(Project project, string notes = "")
     {
         if (IsRunning && Active is not null && Active.Id == project.Id) return; // already live
+        if (WouldCollideIfStartedNow() is TimeBlock collision) { StartRefused?.Invoke(collision); return; }
         if (IsRunning) BankCurrent(_utcNow(), notes);
         Active = project;
         _state.ActiveProjectId = project.Id;
@@ -130,6 +148,52 @@ public sealed class TrackerService
         _state.BlockStartUtc = _utcNow();
         _store.SaveState(_state);
         Changed?.Invoke();
+    }
+
+    /// <summary>The existing committed block that already covers this exact instant, if any —
+    /// checked before starting/switching (see StartOrSwitch). Unscheduled ("by amount") entries
+    /// never collide with anything, since they don't occupy a specific time (see
+    /// TimeBlock.Unscheduled).</summary>
+    private TimeBlock? WouldCollideIfStartedNow()
+    {
+        var nowLocal = _utcNow().ToLocalTime();
+        return _log.ReadRange(nowLocal.Date, nowLocal.Date)
+            .Where(b => !b.Unscheduled && b.StartLocal.Date == nowLocal.Date)
+            .FirstOrDefault(b => nowLocal >= b.StartLocal && nowLocal < b.EndLocal);
+    }
+
+    /// <summary>
+    /// Call once a second while a session is running (TrackerService doesn't own a timer itself
+    /// — see App's Tick). If the live session has grown into the start of an existing block
+    /// placed ahead of it, stops the session right there — truncated at that block's start, not
+    /// past it, so nothing overlaps — and raises <see cref="LiveSessionCollided"/> with the block
+    /// it hit so the UI can explain why. Returns the same block for convenience; null on the
+    /// overwhelmingly common no-collision tick.
+    /// </summary>
+    public TimeBlock? CheckForLiveCollision()
+    {
+        if (!IsRunning || _state.BlockStartUtc is not DateTime startUtc) return null;
+        var nowLocal = _utcNow().ToLocalTime();
+        var startLocal = startUtc.ToLocalTime();
+
+        var collision = _log.ReadRange(nowLocal.Date, nowLocal.Date)
+            .Where(b => !b.Unscheduled && b.StartLocal.Date == nowLocal.Date && b.StartLocal > startLocal && b.StartLocal <= nowLocal)
+            .OrderBy(b => b.StartLocal)
+            .FirstOrDefault();
+        if (collision is null) return null;
+
+        // Same shutdown sequence Stop() uses, just ending at the collision's start instead of
+        // "now" — truncating rather than silently running the banked block past it.
+        var collisionStartUtc = DateTime.SpecifyKind(collision.StartLocal, DateTimeKind.Local).ToUniversalTime();
+        BankCurrent(collisionStartUtc, "");
+        Active = null;
+        _state.ActiveProjectId = null;
+        _state.ActiveProjectCode = null;
+        _state.BlockStartUtc = null;
+        _store.SaveState(_state);
+        Changed?.Invoke();
+        LiveSessionCollided?.Invoke(collision);
+        return collision;
     }
 
     /// <summary>Stop tracking, banking the current block with an optional note.</summary>

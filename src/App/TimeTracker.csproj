@@ -12,7 +12,7 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <!-- Per-monitor DPI so the pill and switcher render crisply on any display. -->
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
-    <Version>0.2.0</Version>
+    <Version>0.3.0</Version>
     <Product>IFS Time Tracker</Product>
     <Company>Daifuku Oceania</Company>
     <ApplicationIcon>Assets\time_tracker.ico</ApplicationIcon>

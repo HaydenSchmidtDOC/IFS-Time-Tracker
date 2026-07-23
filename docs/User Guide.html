@@ -261,7 +261,7 @@
   </div>
   <h1>IFS Time Tracker</h1>
   <p class="tagline">Track hours against IFS projects without leaving your desktop.</p>
-  <span class="beta-chip">v0.2.0 Beta · quick guide</span>
+  <span class="beta-chip">v0.3.0 Beta · quick guide</span>
 </header>
 
 <nav class="toc">
@@ -280,22 +280,19 @@
 <div class="wrap">
 
   <section id="whatsnew">
-    <h2>New in v0.2.0</h2>
-    <h3>The timesheet view got a lot more capable</h3>
-    <p class="lede">Worth a skim before you dive back in — most of this round's changes are in Timesheets.</p>
+    <h2>New in v0.3.0</h2>
+    <h3>Adding time is safer, and a bit more flexible</h3>
+    <p class="lede">Worth a skim before you dive back in — this round is mostly about what happens when manually-added time and live tracking might otherwise collide.</p>
 
     <ul class="list">
-      <li><b>Calendar view</b> — an hour-by-hour day view next to the existing bar chart, switched with the <b>Totals / Calendar</b> toggle in the Timesheets header.</li>
-      <li><b>Add time by hand</b> — the <b>＋</b> button (or double-clicking blank space in Calendar view) logs a block you forgot to start live, either by amount or by exact start/end times.</li>
-      <li><b>Edit a block</b> — click it in Calendar view to correct its project, start, or end time.</li>
-      <li><b>Delete a block</b> — hover it in Calendar view for a small <b>✕</b> (confirms before deleting), or delete from within the edit dialog if it's too small to show that.</li>
-      <li><b>Drag to resize or move</b> — drag a block's edge to resize it, or its body to move it, including past other blocks into an open gap and onto a different day.</li>
-      <li><b>Light/dark mode and your accent colour now follow Windows live</b> — no restart needed if you switch themes.</li>
-      <li><b>ASN is optional</b> when adding a project now, and code/name/ASN can all be edited afterwards.</li>
-      <li><b>Timesheet-view settings moved</b> — snap distances, default view, and chart grouping now live in one popover: the <b>⚙</b> in the bottom-right corner of the Timesheets chart, not the main Settings window.</li>
+      <li><b>"By amount" no longer needs a specific time.</b> Adding time by amount now just logs a total for that day and project — no clock position, so it never has to fit in whatever gap is left, and it can't collide with anything. In Calendar view it shows as a small chip under the day header instead of a positioned block.</li>
+      <li><b>Tracking now protects itself from overlaps.</b> Starting or switching projects refuses (and tells you why) if "now" already falls inside something you've already logged. And if a running session grows into the start of a block you placed ahead of it, it stops right there instead of quietly overlapping it.</li>
+      <li>Because of the above, adding time by exact times (or dragging a block) can now target the future — that used to be restricted, and no longer needs to be.</li>
+      <li>A small <b>＋</b> now sits above every day's bar in Totals view too, opening the same Add dialog pre-set to that day.</li>
+      <li>The app version now shows at the bottom of Settings.</li>
     </ul>
 
-    <p style="margin-top:18px"><b>Also fixed:</b> adding or editing time while a session is live no longer risks double-booking that stretch of time, and a couple of animation glitches (the "recording" pulse, the Totals/Calendar toggle) are smoother now.</p>
+    <p style="margin-top:18px"><b>Also fixed:</b> a crash when closing the Add-time dialog, which now also dismisses on an outside click like the Timesheet settings popover; and the Timesheets window's open/close animation, which went through a few rough rounds and is now a plain, reliable fade on the chart area (the header bar stays static on purpose).</p>
 
     <div class="callout beta">
       <h4>Known limitations</h4>

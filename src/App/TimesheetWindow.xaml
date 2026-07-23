@@ -89,17 +89,32 @@
                              CornerRadius="8" UseAeroCaptionButtons="False"/>
     </shell:WindowChrome.WindowChrome>
 
-    <!-- RenderTransformOrigin=0,0 + the named Scale/Translate below let the open/close transition
-         animate a pure GPU-composited transform on the content instead of resizing the actual
-         OS window frame-by-frame (which is heavy/janky for a window with real chrome — see
-         AnimateOpenFrom/AnimateCloseTo). -->
-    <Grid RenderTransformOrigin="0,0">
-        <Grid.RenderTransform>
-            <TransformGroup>
-                <ScaleTransform x:Name="ScaleXform"/>
-                <TranslateTransform x:Name="TranslateXform"/>
-            </TransformGroup>
-        </Grid.RenderTransform>
+    <!-- The open/close transition (AnimateOpenFrom/AnimateCloseTo) went through two earlier
+         attempts at a "grows out of the button it was opened from" effect, worth recording since
+         neither failure mode was obvious up front:
+           1. Real window bounds jump straight to target immediately, content scale+translates
+              from a small starting rect up to identity via RenderTransform. Cheap (a transform
+              doesn't trigger layout) — but this window can't use AllowsTransparency (needs real
+              Aero-Snap/native resize via WindowChrome below), so its own backdrop was
+              unavoidably opaque and at full target size the instant Show() ran, no matter what
+              animated on top of it: "the window just appears, then content grows inside it".
+           2. Animate the window's REAL Left/Top/Width/Height instead, so the boundary itself
+              genuinely grows. Fixed #1, but broke something #1 never had a problem with: real
+              bounds changing means the live content actually re-lays-out at every transient size
+              along the way — a Grid full of buttons/text and a MinWidth="640" below don't have a
+              graceful "cross-faded through 40% of my normal width" state, so it visibly
+              crammed/reflowed mid-resize.
+         Both were chasing the same effect from a different direction and both had a real, load-
+         bearing reason a plain content-level animation doesn't: bounds are set to target
+         ONCE, immediately, never animated — so nothing ever re-lays-out at the wrong size — and
+         the chart area (not the header — see its own RenderTransform below, a persistent
+         toolbar/title-bar-like strip visibly shrinking and growing read as broken chrome, not
+         smooth, so it's excluded and just appears instantly) does a purely cosmetic fade +
+         subtle scale-settle (96%→100%, centred). Ordinary content-level opacity/transform
+         composites correctly regardless of the AllowsTransparency limitation that broke #1's
+         window-level opacity, and unlike #2 it never touches a real, live-laid-out size other
+         than the final one. -->
+    <Grid x:Name="RootGrid" Background="{DynamicResource Bg}">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
@@ -204,9 +219,15 @@
                 </Border>
         </Popup>
 
-        <!-- chart -->
-        <Grid Grid.Row="1" Margin="24" MouseWheel="ChartArea_MouseWheel"
-              PreviewMouseWheel="ChartArea_PreviewMouseWheel" Background="Transparent">
+        <!-- chart — the animated part of the open/close transition (see the remarks up top);
+             RenderTransformOrigin/RenderTransform are here, not on the whole window's content,
+             specifically so the header strip above stays static/instant. -->
+        <Grid x:Name="ChartArea" Grid.Row="1" Margin="24" MouseWheel="ChartArea_MouseWheel"
+              PreviewMouseWheel="ChartArea_PreviewMouseWheel" Background="Transparent"
+              RenderTransformOrigin="0.5,0.5">
+            <Grid.RenderTransform>
+                <ScaleTransform x:Name="ScaleXform"/>
+            </Grid.RenderTransform>
             <Grid.RowDefinitions>
                 <RowDefinition Height="*"/>
                 <!-- Fixed, not Auto: a wrapping legend's height changes with window width, which

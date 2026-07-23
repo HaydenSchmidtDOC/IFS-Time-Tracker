@@ -54,7 +54,9 @@ public partial class DayBlocksWindow : Window
         var info = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
         info.Children.Add(new TextBlock
         {
-            Text = $"{b.ProjectCode}   {b.StartLocal:HH:mm}–{b.EndLocal:HH:mm}",
+            // Unscheduled ("by amount") entries have no real clock position — StartLocal/EndLocal
+            // are just a midnight-anchored placeholder — see TimeBlock.Unscheduled.
+            Text = b.Unscheduled ? $"{b.ProjectCode}   no specific time" : $"{b.ProjectCode}   {b.StartLocal:HH:mm}–{b.EndLocal:HH:mm}",
             FontSize = 12.5, FontWeight = FontWeights.Medium, Foreground = (Brush)FindResource("Text"),
             TextTrimming = TextTrimming.CharacterEllipsis,
         });

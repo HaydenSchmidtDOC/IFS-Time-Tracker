@@ -15,11 +15,17 @@ namespace TimeTracker.App;
 /// chart (defaults to today, "Amount" mode), and double-clicking blank space in the calendar
 /// view (defaults to the clicked day/time, "Times" mode, pre-filled).
 ///
-/// The dialog itself only collects and validates (project, start, end) against that day's
-/// existing blocks — it does not touch the log directly. The actual CsvLog.Append and the
-/// optional note prompt happen in the static Ask*/Commit path AFTER the dialog has closed, so
-/// NotePrompt shows as its own top-level dialog rather than nested on top of this one, and so
-/// this class stays a plain "collect input" dialog like AddProjectDialog/NotePrompt.
+/// "Amount" and "Times" are genuinely different kinds of record, not just two ways to fill in
+/// the same fields: Times commits to an exact start/end and is validated against that day's
+/// other clock-positioned blocks; Amount is a day+project+duration total with no clock time at
+/// all (see TimeBlock.Unscheduled) — it never needs validating against anything, since it
+/// doesn't occupy a slot anything else could collide with.
+///
+/// The dialog itself only collects and validates — it does not touch the log directly. The
+/// actual CsvLog.Append and the optional note prompt happen in the static Ask*/Commit path AFTER
+/// the dialog has closed, so NotePrompt shows as its own top-level dialog rather than nested on
+/// top of this one, and so this class stays a plain "collect input" dialog like
+/// AddProjectDialog/NotePrompt.
 /// </summary>
 public partial class AddTimeDialog : Window
 {
@@ -30,11 +36,12 @@ public partial class AddTimeDialog : Window
     private SegmentedToggle _modeToggle = null!;
     private (DateTime Start, DateTime End)? _result;
     private bool _deleteConfirmed;
+    private bool _closing; // guards against Deactivated re-entering Close() — see the ctor
 
     /// <summary>Non-null when this dialog is correcting an existing block rather than adding a
-    /// new one — see AskEdit. Editing only ever goes through "Times" (a fixed start/end), never
-    /// "Amount" (which is defined relative to the day's other blocks and doesn't have a
-    /// meaningful reading for "this one specific block").</summary>
+    /// new one — see AskEdit. Editing never shows the Amount/Times toggle — it shows whichever
+    /// panel actually matches the block's own kind (Amount for an unscheduled entry, Times for a
+    /// real one), since "convert between the two" isn't something this dialog offers.</summary>
     private TimeBlock? _editingBlock;
 
     private AddTimeDialog(DateTime day, int initialMode, TimeSpan? prefillStart, TimeSpan? prefillEnd,
@@ -50,8 +57,11 @@ public partial class AddTimeDialog : Window
 
         // Fields must hold their defaults BEFORE the first RefreshModeVisibility()/RefreshAmountHint()
         // call below reads them — otherwise the initial hint briefly shows "enter a duration" against
-        // still-empty boxes.
-        int defaultMinutes = Math.Max(1, A.Settings.ManualBlockMaxMinutes);
+        // still-empty boxes. Editing an unscheduled block previews its OWN duration, not the
+        // usual new-entry default.
+        int defaultMinutes = _editingBlock is { Unscheduled: true } eb
+            ? Math.Max(1, (int)Math.Round(eb.DurationSeconds / 60.0))
+            : Math.Max(1, A.Settings.ManualBlockMaxMinutes);
         AmountHoursBox.Text = (defaultMinutes / 60).ToString();
         AmountMinutesBox.Text = (defaultMinutes % 60).ToString();
         AmountHoursBox.TextChanged += (_, _) => { if (_modeToggle.SelectedIndex == 0) RefreshAmountHint(); };
@@ -72,10 +82,13 @@ public partial class AddTimeDialog : Window
             DayNavGrid.Visibility = Visibility.Collapsed;
             ModeLabel.Visibility = Visibility.Collapsed;
             ModeToggleHost.Visibility = Visibility.Collapsed;
-            AmountPanel.Visibility = Visibility.Collapsed;
-            AmountHintText.Visibility = Visibility.Collapsed;
-            TimesPanel.Visibility = Visibility.Visible;
             DeleteRow.Visibility = Visibility.Visible;
+
+            bool unscheduled = _editingBlock.Unscheduled;
+            AmountPanel.Visibility = unscheduled ? Visibility.Visible : Visibility.Collapsed;
+            AmountHintText.Visibility = unscheduled ? Visibility.Visible : Visibility.Collapsed;
+            TimesPanel.Visibility = unscheduled ? Visibility.Collapsed : Visibility.Visible;
+            if (unscheduled) RefreshAmountHint();
         }
         else
         {
@@ -83,6 +96,16 @@ public partial class AddTimeDialog : Window
         }
 
         KeyDown += (_, e) => { if (e.Key == Key.Escape) Close(); };
+        // Click off to dismiss, same light-dismiss feel as the Timesheet settings popover —
+        // a real Window doesn't get that for free the way a Popup does, so it's wired by hand:
+        // clicking anywhere outside this window (it can't be the owner, which is non-interactive
+        // while this is modal) hands focus elsewhere, which is exactly what Deactivated reports.
+        // Closing (not Deactivated) is what actually marks _closing — Close() itself deactivates
+        // the window as part of shutting down, so without this guard every OTHER way of closing
+        // (Cancel, Add, Escape, the delete confirm) re-entered Close() a second time via this
+        // same handler and crashed ("...while a Window is closing").
+        Closing += (_, _) => _closing = true;
+        Deactivated += (_, _) => { if (!_closing) Close(); };
     }
 
     /// <summary>Open defaulted to today, "Amount" mode. Returns true if a block was added.</summary>
@@ -107,7 +130,7 @@ public partial class AddTimeDialog : Window
     public static bool AskEdit(Window owner, TimeBlock block)
     {
         var project = A.Tracker.FindByBlock(block);
-        var d = new AddTimeDialog(block.StartLocal.Date, initialMode: 1,
+        var d = new AddTimeDialog(block.StartLocal.Date, initialMode: block.Unscheduled ? 0 : 1,
             block.StartLocal.TimeOfDay, block.EndLocal.TimeOfDay, editingBlock: block, preselectProject: project)
         { Owner = owner };
         d.ShowDialog();
@@ -144,12 +167,12 @@ public partial class AddTimeDialog : Window
         if (byAmount) RefreshAmountHint();
     }
 
-    /// <summary>Previews where "by amount" will actually land, since it's computed (end of day),
-    /// not typed — so the user isn't guessing what pressing Add will do.</summary>
+    /// <summary>Previews what pressing Add/Save will actually record.</summary>
     private void RefreshAmountHint()
     {
-        var placement = ComputeAmountPlacement(out var error);
-        AmountHintText.Text = error ?? $"Will be added {Fmt(placement!.Value.Start.TimeOfDay)}–{Fmt(placement.Value.End.TimeOfDay)}.";
+        AmountHintText.Text = TryGetAmountMinutes(out var minutes, out var error)
+            ? $"Adds {minutes / 60}h {minutes % 60}m to {DayText.Text}'s total for this project — no specific clock time."
+            : error;
     }
 
     private void BuildProjectRows(Project? preselect = null)
@@ -230,59 +253,40 @@ public partial class AddTimeDialog : Window
     /// dialog itself operates on keeps the comparison apples-to-apples.</summary>
     private static DateTime TruncateToMinute(DateTime d) => new(d.Year, d.Month, d.Day, d.Hour, d.Minute, 0, d.Kind);
 
-    /// <summary>That day's occupied spans — committed blocks (excluding the one being edited, if
-    /// any — see AskEdit) plus, for today, the still-running live session.
+    /// <summary>That day's occupied spans — committed, clock-positioned blocks only (excluding
+    /// the one being edited, if any — see AskEdit) plus, for today, the still-running live
+    /// session's REAL elapsed range (start → now, not extended any further). Unscheduled ("by
+    /// amount") entries never occupy a range at all and are never in this list, on either side of
+    /// the comparison — see TimeBlock.Unscheduled.
     ///
-    /// The live session is recorded as occupying from its start all the way to MIDNIGHT, not
-    /// just "up to now": its real end isn't known yet — it's however long it keeps running for
-    /// after this dialog closes — so anything from its start onward is unsafe to also claim
-    /// manually, not only the sliver that's elapsed so far. (A block ending exactly "now" and
-    /// committed this instant would still collide the moment the live session itself is finally
-    /// stopped, since it kept running through that same stretch in the meantime.) Only time
-    /// strictly BEFORE the live session started is actually free to backfill.</summary>
+    /// Deliberately NOT extended past "now": a Times-mode entry (or a drag) is free to target the
+    /// future, including time after a currently-live session's start — that's no longer treated
+    /// as unsafe to create. What used to be prevented here (a future entry silently colliding
+    /// with wherever a live session eventually grows to) is instead handled live, at the moment
+    /// it'd actually happen, by TrackerService's own collision check.</summary>
     private List<(DateTime Start, DateTime End)> OccupiedRanges()
     {
         var ranges = A.Log.ReadRange(_day, _day)
-            .Where(b => b.StartLocal.Date == _day && (_editingBlock is null || b.Id != _editingBlock.Id))
+            .Where(b => b.StartLocal.Date == _day && !b.Unscheduled && (_editingBlock is null || b.Id != _editingBlock.Id))
             .Select(b => (Start: TruncateToMinute(b.StartLocal), End: TruncateToMinute(b.EndLocal)))
             .ToList();
         if (_day == DateTime.Today && LiveSessionStart() is DateTime liveStart)
-            ranges.Add((TruncateToMinute(liveStart), _day.AddDays(1)));
+            ranges.Add((TruncateToMinute(liveStart), TruncateToMinute(DateTime.Now)));
         ranges.Sort((a, b) => a.Start.CompareTo(b.Start));
         return ranges;
     }
 
-    /// <summary>Where "by amount" lands: right after the last occupied span that day (or 09:00
-    /// if the day's empty), capped at midnight or the next occupied span — whichever is sooner —
-    /// so it can never silently overlap something already recorded. While a live session is
-    /// running, it occupies the rest of the day (see OccupiedRanges), so this naturally refuses
-    /// to place anything rather than landing inside/after it.</summary>
-    private (DateTime Start, DateTime End)? ComputeAmountPlacement(out string? error)
+    /// <summary>Validates the typed duration — the entire "by amount" contract now, since it no
+    /// longer has a clock placement to compute (see TimeBlock.Unscheduled): no day-boundary math,
+    /// no interaction with existing blocks or a live session, because it doesn't occupy a time
+    /// range for any of that to matter against.</summary>
+    private bool TryGetAmountMinutes(out int minutes, out string? error)
     {
+        minutes = (int.TryParse(AmountHoursBox?.Text, out var h) ? h : 0) * 60
+                + (int.TryParse(AmountMinutesBox?.Text, out var m) ? m : 0);
+        if (minutes <= 0) { error = "Enter a duration greater than zero."; return false; }
         error = null;
-        int minutes = (int.TryParse(AmountHoursBox?.Text, out var h) ? h : 0) * 60
-                    + (int.TryParse(AmountMinutesBox?.Text, out var m) ? m : 0);
-        if (minutes <= 0) { error = "Enter a duration greater than zero."; return null; }
-
-        var ranges = OccupiedRanges();
-        DateTime dayStart = _day;
-        DateTime dayEnd = _day.AddDays(1);
-        DateTime start = ranges.Count > 0 ? ranges[^1].End : dayStart.AddHours(9);
-        if (start < dayStart) start = dayStart;
-
-        // The next span starting at/after `start`, if any — bounds how far the new block can run.
-        DateTime boundary = ranges.Where(r => r.Start >= start).Select(r => r.Start).DefaultIfEmpty(dayEnd).Min();
-        if (start >= boundary)
-        {
-            error = _day == DateTime.Today && LiveSessionStart() is DateTime liveStart
-                ? $"You're currently tracking (since {liveStart:HH:mm}) — \"Amount\" always adds after the day's last block, but that session hasn't ended yet. Use \"Times\" to backfill a gap before {liveStart:HH:mm}, or stop/switch first."
-                : "No room left that day to add time automatically — try \"Times\" instead.";
-            return null;
-        }
-
-        DateTime end = start.AddMinutes(minutes);
-        if (end > boundary) end = boundary;
-        return (start, end);
+        return true;
     }
 
     private bool TryParseTimesMode(out DateTime start, out DateTime end, out string? error)
@@ -303,7 +307,7 @@ public partial class AddTimeDialog : Window
             if (start < re && end > rs)
             {
                 error = _day == DateTime.Today && liveStart == rs
-                    ? $"Overlaps your active session (still running since {rs:HH:mm}) — only time before {rs:HH:mm} is free today, or stop/switch first."
+                    ? $"Overlaps your active session, running since {rs:HH:mm} — try a time before {rs:HH:mm}, or after {re:HH:mm} (right now)."
                     : $"Overlaps an existing block ({rs:HH:mm}–{re:HH:mm}).";
                 return false;
             }
@@ -319,8 +323,10 @@ public partial class AddTimeDialog : Window
         (DateTime Start, DateTime End)? span;
         if (_modeToggle.SelectedIndex == 0)
         {
-            span = ComputeAmountPlacement(out var error);
-            if (span is null) { ShowError(error!); return; }
+            if (!TryGetAmountMinutes(out var minutes, out var error)) { ShowError(error!); return; }
+            // Nominal, midnight-anchored placeholder — see TimeBlock.Unscheduled. Not a real
+            // clock position; Commit() is what actually marks it as such.
+            span = (_day, _day.AddMinutes(minutes));
         }
         else
         {
@@ -343,6 +349,7 @@ public partial class AddTimeDialog : Window
         if (_result is null || _selectedProject is null) return false;
         var (start, end) = _result.Value;
         var project = _selectedProject;
+        bool unscheduled = _modeToggle.SelectedIndex == 0;
 
         if (_editingBlock is not null)
         {
@@ -352,6 +359,7 @@ public partial class AddTimeDialog : Window
                 StartLocal = start, EndLocal = end,
                 DurationSeconds = (long)(end - start).TotalSeconds,
                 Notes = _editingBlock.Notes,
+                Unscheduled = unscheduled,
             };
             return A.Log.UpdateBlock(_editingBlock, updated);
         }
@@ -364,6 +372,7 @@ public partial class AddTimeDialog : Window
             StartLocal = start, EndLocal = end,
             DurationSeconds = (long)(end - start).TotalSeconds,
             Notes = note,
+            Unscheduled = unscheduled,
         };
         A.Log.Append(block);
         return true;

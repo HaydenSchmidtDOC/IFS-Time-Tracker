@@ -106,6 +106,8 @@ public partial class App : Application
         Exporter = new IfsExporter(Log, Paths);
 
         Tracker.Changed += () => { UpdateTray(); StateChanged?.Invoke(); };
+        Tracker.StartRefused += collision => InfoPrompt.Show("Can't start tracking", CollisionMessage(collision, ended: false));
+        Tracker.LiveSessionCollided += collision => InfoPrompt.Show("Session ended", CollisionMessage(collision, ended: true));
 
         BuildTray();
 
@@ -122,7 +124,9 @@ public partial class App : Application
         _idle.Start();
 
         _uiTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
-        _uiTimer.Tick += (_, _) => { Tick?.Invoke(); UpdateTrayTooltip(); };
+        // Checked first, before Tick fires — if it stops the session, everything Tick refreshes
+        // (pill, timesheet, tray) should already see the post-stop state, not lag a tick behind.
+        _uiTimer.Tick += (_, _) => { Tracker.CheckForLiveCollision(); Tick?.Invoke(); UpdateTrayTooltip(); };
         _uiTimer.Start();
 
         UpdateTray();
@@ -245,6 +249,19 @@ public partial class App : Application
             text = "IFS Time Tracker — stopped";
         // NotifyIcon.Text is capped at 63 chars.
         _tray.Text = text.Length > 63 ? text[..63] : text;
+    }
+
+    /// <summary>Shared wording for both tracking-collision popups (see Tracker.StartRefused/
+    /// LiveSessionCollided) — same facts, phrased for whichever moment triggered it.</summary>
+    private string CollisionMessage(TimeBlock collision, bool ended)
+    {
+        var p = Tracker.FindByBlock(collision);
+        string who = p is not null
+            ? (string.IsNullOrWhiteSpace(p.Name) ? p.Code : $"{p.Code} · {p.Name}")
+            : collision.ProjectCode;
+        return ended
+            ? $"You already have {who} logged from {collision.StartLocal:HH:mm}, so tracking stopped there instead of running into it."
+            : $"You already have {who} logged for {collision.StartLocal:HH:mm}–{collision.EndLocal:HH:mm} today.";
     }
 
     public static string FormatElapsed(long seconds)

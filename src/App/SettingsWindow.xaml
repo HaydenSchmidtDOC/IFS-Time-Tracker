@@ -126,6 +126,8 @@
 
                     <Border Height="1" Background="{DynamicResource Border}" Margin="0,18"/>
                     <Button Content="Save" Click="Save_Click" Style="{StaticResource BtnAccent}"/>
+                    <TextBlock x:Name="VersionText" FontSize="10.5" Foreground="{DynamicResource TextFaint}"
+                               HorizontalAlignment="Center" Margin="0,14,0,0"/>
                 </StackPanel>
             </ScrollViewer>
         </Grid>

@@ -20,7 +20,7 @@ public sealed class CsvLog
     {
         "Date", "ProjectCode", "ASN", "ProjectName",
         "StartLocal", "EndLocal", "DurationSeconds", "DurationHours", "Notes",
-        "ProjectId", "BlockId",
+        "ProjectId", "BlockId", "Unscheduled",
     };
 
     /// <summary>Minimum column count for a row to be considered parseable at all — the original
@@ -51,6 +51,7 @@ public sealed class CsvLog
             b.Notes,
             b.ProjectId,
             b.Id,
+            b.Unscheduled ? "1" : "0",
         }));
     }
 
@@ -77,6 +78,7 @@ public sealed class CsvLog
                 Notes           = f[8],
                 ProjectId       = f.Count > 9 ? f[9] : "",
                 Id              = f.Count > 10 && !string.IsNullOrEmpty(f[10]) ? f[10] : LegacyId(f),
+                Unscheduled     = f.Count > 11 && f[11] == "1",
             });
         }
         return result;
@@ -176,6 +178,7 @@ public sealed class CsvLog
                 updated.Notes ?? f[8],
                 projectId,
                 blockId,
+                updated.Unscheduled ? "1" : "0",
             });
             File.WriteAllLines(file, lines);
             return true;
