@@ -16,8 +16,6 @@ public partial class SettingsWindow : Window
     private readonly List<Project> _projects;                 // working copy
     private readonly List<MappingEntry> _mapping;              // working copy
     private DateTime _exportMonth = new(DateTime.Today.Year, DateTime.Today.Month, 1);
-    private double _chartMinSegmentHours;
-    private bool _chartMergeAllSessions;
     private bool _closingConfirmed;                            // set once Save/Discard has resolved, so OnClosing doesn't re-prompt
 
     public SettingsWindow()
@@ -34,9 +32,6 @@ public partial class SettingsWindow : Window
         DateFormatBox.Text = s.ExportDateFormat;
         DataFolderText.Text = A.Paths.DataFolder;
         DataOverrideBox.Text = s.DataFolderOverride ?? "";
-        _chartMinSegmentHours = s.ChartMinSegmentHours;
-        _chartMergeAllSessions = s.ChartMergeAllSessions;
-        MergeSessionsCheck.IsChecked = _chartMergeAllSessions;
 
         _projects = A.Tracker.Projects.Select(Clone).ToList();
         _mapping = s.IfsExportMapping.Select(m => new MappingEntry { Header = m.Header, Field = m.Field }).ToList();
@@ -44,48 +39,9 @@ public partial class SettingsWindow : Window
         RebuildProjectRows();
         RebuildMappingRows();
         RefreshMonthLabel();
-
-        // If the saved value is already index 0, setting Value=0 below is a no-op and
-        // ValueChanged never fires — so the label text is applied explicitly here too, not
-        // left to only happen as a side effect of the event.
-        int startIdx = ClosestDensityIndex(_chartMinSegmentHours);
-        DensitySlider.Value = startIdx;
-        RefreshDensityLabel(startIdx);
     }
 
-    // ================= chart density =================
-    // The slider is index-based (0-6), not value-based — the presets aren't evenly spaced
-    // (fine-grained near zero, coarser further out), so a real-valued slider couldn't snap
-    // evenly across them.
-
-    private static readonly double[] DensityPresets = { 0, 0.05, 0.1, 0.25, 0.5, 1, 2 };
-
-    private static int ClosestDensityIndex(double hours)
-    {
-        int best = 0;
-        double bestDiff = double.MaxValue;
-        for (int i = 0; i < DensityPresets.Length; i++)
-        {
-            double diff = Math.Abs(DensityPresets[i] - hours);
-            if (diff < bestDiff) { bestDiff = diff; best = i; }
-        }
-        return best;
-    }
-
-    private void DensitySlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-    {
-        int idx = (int)Math.Round(e.NewValue);
-        _chartMinSegmentHours = DensityPresets[idx];
-        RefreshDensityLabel(idx);
-    }
-
-    private void RefreshDensityLabel(int idx)
-        => DensityValueText.Text = DensityPresets[idx] <= 0 ? "Off" : $"Fold under {DensityPresets[idx]:0.##} h";
-
-    private void MergeSessionsCheck_Changed(object sender, RoutedEventArgs e)
-        => _chartMergeAllSessions = MergeSessionsCheck.IsChecked == true;
-
-    private static Project Clone(Project p) => new() { Code = p.Code, Asn = p.Asn, Name = p.Name, Color = p.Color, Order = p.Order };
+    private static Project Clone(Project p) => new() { Id = p.Id, Code = p.Code, Asn = p.Asn, Name = p.Name, Color = p.Color, Order = p.Order };
 
     // ================= Projects =================
 
@@ -127,7 +83,9 @@ public partial class SettingsWindow : Window
         var editBtn = new Button { Content = "Edit", Style = (Style)FindResource("Btn"), FontSize = 11, Padding = new Thickness(9, 3, 9, 3), Margin = new Thickness(0, 0, 6, 0) };
         editBtn.Click += (_, _) =>
         {
-            var updated = AddProjectDialog.Edit(this, p, _projects.Where(x => x.Code != p.Code).ToList());
+            // Exclude by Id, not Code — Code is now editable (see AddProjectDialog), so the
+            // uniqueness check below needs a stable way to mean "every OTHER project".
+            var updated = AddProjectDialog.Edit(this, p, _projects.Where(x => x.Id != p.Id).ToList());
             if (updated is not null) RebuildProjectRows();
         };
         Grid.SetColumn(editBtn, 2);
@@ -237,8 +195,6 @@ public partial class SettingsWindow : Window
         if (int.TryParse(IdleBox.Text, out var mins) && mins > 0) s.IdleThresholdMinutes = mins;
         s.ExportDateFormat = string.IsNullOrWhiteSpace(DateFormatBox.Text) ? s.ExportDateFormat : DateFormatBox.Text;
         s.IfsExportMapping = _mapping.Where(m => !string.IsNullOrWhiteSpace(m.Header)).ToList();
-        s.ChartMinSegmentHours = _chartMinSegmentHours;
-        s.ChartMergeAllSessions = _chartMergeAllSessions;
         A.Store.SaveSettings(s);
         A.RefreshIdleThreshold();
 
@@ -295,8 +251,6 @@ public partial class SettingsWindow : Window
         var overrideText = string.IsNullOrWhiteSpace(DataOverrideBox.Text) ? null : DataOverrideBox.Text.Trim();
         if (overrideText != s.DataFolderOverride) return true;
 
-        if (_chartMinSegmentHours != s.ChartMinSegmentHours) return true;
-        if (_chartMergeAllSessions != s.ChartMergeAllSessions) return true;
         if (!ProjectsEqual(_projects, A.Tracker.Projects)) return true;
         if (!MappingEqual(_mapping, s.IfsExportMapping)) return true;
 

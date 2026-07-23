@@ -8,6 +8,78 @@
         WindowStyle="None" ResizeMode="CanResize" ShowInTaskbar="True"
         Background="{DynamicResource Bg}" FontFamily="{StaticResource UiFont}"
         Closing="Window_Closing" StateChanged="Window_StateChanged">
+    <Window.Resources>
+        <!-- Density slider: 7 evenly-spaced index positions (0-6), not a continuous range — the
+             presets themselves (0/.05/.1/.25/.5/1/2h) aren't evenly spaced, so the slider drives
+             an index and code maps that to the real value. Notch dots + a filled track segment
+             give the snap points a visible target instead of a plain bare handle. Lives here (not
+             SettingsWindow) now that every timesheet-view setting lives in one place — the cog
+             popover below — rather than split across two windows. -->
+        <Style x:Key="DensitySliderStyle" TargetType="Slider">
+            <Setter Property="Minimum" Value="0"/>
+            <Setter Property="Maximum" Value="6"/>
+            <Setter Property="IsSnapToTickEnabled" Value="True"/>
+            <Setter Property="TickFrequency" Value="1"/>
+            <Setter Property="Height" Value="30"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Slider">
+                        <Grid VerticalAlignment="Center">
+                            <Border Height="4" CornerRadius="2" Margin="10,0" Background="{DynamicResource Surface3}"/>
+                            <Grid Margin="19,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Ellipse Grid.Column="0" Width="6" Height="6" Fill="{DynamicResource BorderStrong}" HorizontalAlignment="Left"/>
+                                <Ellipse Grid.Column="1" Width="6" Height="6" Fill="{DynamicResource BorderStrong}" HorizontalAlignment="Center"/>
+                                <Ellipse Grid.Column="2" Width="6" Height="6" Fill="{DynamicResource BorderStrong}" HorizontalAlignment="Center"/>
+                                <Ellipse Grid.Column="3" Width="6" Height="6" Fill="{DynamicResource BorderStrong}" HorizontalAlignment="Center"/>
+                                <Ellipse Grid.Column="4" Width="6" Height="6" Fill="{DynamicResource BorderStrong}" HorizontalAlignment="Center"/>
+                                <Ellipse Grid.Column="5" Width="6" Height="6" Fill="{DynamicResource BorderStrong}" HorizontalAlignment="Center"/>
+                                <Ellipse Grid.Column="6" Width="6" Height="6" Fill="{DynamicResource BorderStrong}" HorizontalAlignment="Right"/>
+                            </Grid>
+                            <Track x:Name="PART_Track" Margin="10,0">
+                                <Track.DecreaseRepeatButton>
+                                    <RepeatButton Command="Slider.DecreaseLarge">
+                                        <RepeatButton.Template>
+                                            <ControlTemplate TargetType="RepeatButton"><Rectangle Fill="Transparent"/></ControlTemplate>
+                                        </RepeatButton.Template>
+                                    </RepeatButton>
+                                </Track.DecreaseRepeatButton>
+                                <Track.IncreaseRepeatButton>
+                                    <RepeatButton Command="Slider.IncreaseLarge">
+                                        <RepeatButton.Template>
+                                            <ControlTemplate TargetType="RepeatButton"><Rectangle Fill="Transparent"/></ControlTemplate>
+                                        </RepeatButton.Template>
+                                    </RepeatButton>
+                                </Track.IncreaseRepeatButton>
+                                <Track.Thumb>
+                                    <Thumb>
+                                        <Thumb.Template>
+                                            <ControlTemplate TargetType="Thumb">
+                                                <Ellipse Width="18" Height="18" Fill="{DynamicResource Accent}"
+                                                         Stroke="{DynamicResource Surface}" StrokeThickness="2">
+                                                    <Ellipse.Effect>
+                                                        <DropShadowEffect BlurRadius="5" ShadowDepth="1" Opacity="0.3"/>
+                                                    </Ellipse.Effect>
+                                                </Ellipse>
+                                            </ControlTemplate>
+                                        </Thumb.Template>
+                                    </Thumb>
+                                </Track.Thumb>
+                            </Track>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
     <!-- WindowChrome keeps native resize/maximize/Aero-Snap/taskbar-thumbnail behaviour while
          letting the title bar be custom-drawn (matching the rest of the app) instead of stock OS
          chrome. CaptionHeight must match the header Border's own Height below; anything inside
@@ -36,22 +108,33 @@
         <!-- header: doubles as the custom title bar (Height matches CaptionHeight above) -->
         <Border Grid.Row="0" Height="64" Background="{DynamicResource Surface2}" Padding="20,0">
             <Grid>
+                <!-- The two outer columns are EQUAL-weighted stars (not Auto) so they're always
+                     the same width as each other regardless of how wide their own content is —
+                     which is what actually guarantees column 1 (Auto, the date group) sits at the
+                     window's true centre. Auto|*|Auto centred column 1 relative to whatever width
+                     was left over between two UNEQUAL side columns, which visibly skewed it away
+                     from centre once the button cluster (column 2) and "WEEK TOTAL" (column 0)
+                     stopped being close to the same width. Each side's own content still hugs its
+                     own edge of the window via Left/Right alignment below, so nothing else moves. -->
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
                 </Grid.ColumnDefinitions>
 
-                <StackPanel Grid.Column="0" VerticalAlignment="Center" shell:WindowChrome.IsHitTestVisibleInChrome="True">
+                <StackPanel Grid.Column="0" HorizontalAlignment="Left" VerticalAlignment="Center"
+                            shell:WindowChrome.IsHitTestVisibleInChrome="True">
                     <TextBlock Text="WEEK TOTAL" Style="{StaticResource EyebrowText}"/>
                     <TextBlock x:Name="WeekTotalText" Text="0.0 h" FontSize="18" FontWeight="SemiBold"
                                FontFamily="{StaticResource MonoFont}" Foreground="{DynamicResource Text}"/>
                 </StackPanel>
 
-                <!-- ColumnSpan=3 centers this on the whole header, not just the leftover space
-                     between the two side columns (which are different widths). -->
-                <StackPanel Grid.Column="0" Grid.ColumnSpan="3" Orientation="Horizontal"
+                <!-- MouseWheel here too (same handler as the calendar view's own pinned day
+                     header) — hovering the date/week indicator and scrolling navigates weeks,
+                     regardless of which view (bar/calendar) is showing below. -->
+                <StackPanel Grid.Column="1" Orientation="Horizontal"
                             HorizontalAlignment="Center" VerticalAlignment="Center"
+                            MouseWheel="ChartArea_MouseWheel"
                             shell:WindowChrome.IsHitTestVisibleInChrome="True">
                     <Button Content="◂" Click="PrevWeek_Click" Style="{StaticResource Btn}" Padding="10,7" ToolTip="Previous week"/>
                     <TextBlock x:Name="WeekLabel" FontSize="14" FontWeight="SemiBold" MinWidth="230"
@@ -60,8 +143,13 @@
                     <Button Content="▸" Click="NextWeek_Click" Style="{StaticResource Btn}" Padding="10,7" ToolTip="Next week"/>
                 </StackPanel>
 
-                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center"
+                <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center"
                             shell:WindowChrome.IsHitTestVisibleInChrome="True">
+                    <Button Content="＋" Click="AddTime_Click" Style="{StaticResource IconBtn}" FontSize="14"
+                            Margin="0,0,10,0" ToolTip="Add time manually"/>
+                    <!-- Populated in code-behind: SegmentedToggle (Totals/Calendar) has no XAML
+                         template of its own — see TimesheetWindow ctor. -->
+                    <ContentControl x:Name="ViewToggleHost" Focusable="False" Margin="0,0,14,0" Width="150"/>
                     <Button Content="—" Click="Minimize_Click" Style="{StaticResource IconBtn}" FontSize="13"/>
                     <Button x:Name="MaxRestoreBtn" Content="▢" Click="MaxRestore_Click" Style="{StaticResource IconBtn}" FontSize="11"/>
                     <Button Content="✕" Click="Close_Click" Style="{StaticResource IconBtn}" FontSize="12"/>
@@ -69,8 +157,56 @@
             </Grid>
         </Border>
 
+        <!-- Every timesheet-VIEW setting lives here — a live-apply popover — and nowhere else
+             (not in the main Settings window), so there's exactly one place to find/change them.
+             StaysOpen=False light-dismisses on an outside click, like a normal popover. Placed as
+             a sibling of the header Border (a Popup is a top-level overlay, not part of normal
+             Grid flow, so it doesn't need — and can't share — a layout cell of its own). -->
+        <!-- The cog now lives in the chart card's bottom-right corner (see below), so the popup
+             opens upward-left from it instead of downward, keeping it on-screen. -->
+        <Popup x:Name="TimesheetSettingsPopup" PlacementTarget="{Binding ElementName=TimesheetSettingsBtn}"
+                   Placement="Top" HorizontalOffset="-264" VerticalOffset="-6"
+                   StaysOpen="False" AllowsTransparency="True" PopupAnimation="Fade">
+                <Border Background="{DynamicResource Surface}" CornerRadius="12" Width="280" Margin="8">
+                    <Border.Effect>
+                        <DropShadowEffect BlurRadius="12" ShadowDepth="3" Opacity="0.34" Color="#161C2A"/>
+                    </Border.Effect>
+                    <StackPanel Margin="18">
+                        <TextBlock Text="Timesheet settings" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource Text}"/>
+                        <TextBlock Text="Changes apply immediately." FontSize="11" Foreground="{DynamicResource TextFaint}" Margin="0,2,0,16"/>
+
+                        <TextBlock Text="DEFAULT VIEW ON OPEN" Style="{StaticResource EyebrowText}" Margin="0,0,0,6"/>
+                        <ContentControl x:Name="DefaultViewToggleHost" Focusable="False" Margin="0,0,0,16"/>
+
+                        <TextBlock Text="EDGE-RESIZE SNAP (MIN)" Style="{StaticResource EyebrowText}" Margin="0,0,0,6"/>
+                        <ComboBox x:Name="EdgeSnapCombo" Style="{StaticResource Dropdown}" Margin="0,0,0,14"/>
+
+                        <TextBlock Text="MOVE SNAP (MIN)" Style="{StaticResource EyebrowText}" Margin="0,0,0,6"/>
+                        <ComboBox x:Name="MoveSnapCombo" Style="{StaticResource Dropdown}" Margin="0,0,0,14"/>
+
+                        <TextBlock Text="MANUAL ADD MAX DURATION (MIN)" Style="{StaticResource EyebrowText}" Margin="0,0,0,6"/>
+                        <ComboBox x:Name="ManualMaxCombo" Style="{StaticResource Dropdown}" Margin="0,0,0,16"/>
+
+                        <Border Height="1" Background="{DynamicResource Border}" Margin="0,0,0,16"/>
+
+                        <CheckBox x:Name="MergeSessionsCheck" Content="Merge every session for a project into one bar"
+                                  Foreground="{DynamicResource Text}" FontSize="12.5" Margin="0,0,0,4"/>
+                        <TextBlock Text="Off: only back-to-back sessions with a matching note merge — the same project touched again later gets its own bar."
+                                   FontSize="10.5" Foreground="{DynamicResource TextFaint}" TextWrapping="Wrap" Margin="0,0,0,16"/>
+
+                        <TextBlock Text="FOLD SMALL SEGMENTS" Style="{StaticResource EyebrowText}" Margin="0,0,0,4"/>
+                        <TextBlock Text="Groups a day's small segments into one &quot;Other&quot; bar (hover it for the exact breakdown). Bar view only."
+                                   FontSize="10.5" Foreground="{DynamicResource TextFaint}" TextWrapping="Wrap" Margin="0,0,0,10"/>
+                        <Slider x:Name="DensitySlider" Style="{StaticResource DensitySliderStyle}"/>
+                        <TextBlock x:Name="DensityValueText" FontSize="11" Foreground="{DynamicResource TextDim}"
+                                   FontFamily="{StaticResource MonoFont}" HorizontalAlignment="Center" Margin="0,4,0,0"/>
+                    </StackPanel>
+                </Border>
+        </Popup>
+
         <!-- chart -->
-        <Grid Grid.Row="1" Margin="24" MouseWheel="ChartArea_MouseWheel" Background="Transparent">
+        <Grid Grid.Row="1" Margin="24" MouseWheel="ChartArea_MouseWheel"
+              PreviewMouseWheel="ChartArea_PreviewMouseWheel" Background="Transparent">
             <Grid.RowDefinitions>
                 <RowDefinition Height="*"/>
                 <!-- Fixed, not Auto: a wrapping legend's height changes with window width, which
@@ -82,6 +218,13 @@
                     ClipToBounds="True" SizeChanged="ChartCard_SizeChanged">
                 <Grid x:Name="ChartHost" Margin="20" ClipToBounds="True"/>
             </Border>
+
+            <!-- Floating in the chart card's own bottom-right corner (not the header) — a sibling
+                 in the same row/cell as ChartCard, not a child of it, so ChartCard's ClipToBounds
+                 doesn't clip it. -->
+            <Button x:Name="TimesheetSettingsBtn" Grid.Row="0" Content="⚙" Click="TimesheetSettings_Click"
+                    Style="{StaticResource IconBtn}" FontSize="14" ToolTip="Timesheet settings"
+                    HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,14,14"/>
 
             <ScrollViewer Grid.Row="1" Margin="4,14,0,0" VerticalScrollBarVisibility="Disabled"
                           HorizontalScrollBarVisibility="Auto">

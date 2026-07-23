@@ -31,10 +31,11 @@ public partial class MainWindow : Window
     private void OnTick() => UpdateLive();
     private void OnStateChanged() { Rebuild(); UpdateLive(); }
 
-    /// <summary>Sync the row list to the current projects, preserving selection by code.</summary>
+    /// <summary>Sync the row list to the current projects, preserving selection by id (stable
+    /// across a rename, unlike Code).</summary>
     private void Rebuild()
     {
-        var selectedCode = (ProjectList.SelectedItem as ProjectRow)?.Code;
+        var selectedId = (ProjectList.SelectedItem as ProjectRow)?.Id;
         _rows.Clear();
         foreach (var p in A.Tracker.Projects)
             _rows.Add(new ProjectRow(p));
@@ -46,8 +47,8 @@ public partial class MainWindow : Window
         // sitting stale. Only fall back to the prior selection (or none at all) once nothing
         // is running; a fresh boot with nothing active shouldn't auto-pick an arbitrary
         // project just to have something selected.
-        var restore = _rows.FirstOrDefault(r => r.Code == A.Tracker.Active?.Code)
-                      ?? _rows.FirstOrDefault(r => r.Code == selectedCode);
+        var restore = _rows.FirstOrDefault(r => r.Id == A.Tracker.Active?.Id)
+                      ?? _rows.FirstOrDefault(r => r.Id == selectedId);
         ProjectList.SelectedItem = restore;
     }
 
@@ -99,7 +100,7 @@ public partial class MainWindow : Window
             totals.TryGetValue(row.Code, out var secs);
             grand += secs;
             row.HoursText = $"{Rounding.ToTenthHours(secs):0.0} h";
-            row.LiveVisibility = (running && active?.Code == row.Code) ? Visibility.Visible : Visibility.Collapsed;
+            row.LiveVisibility = (running && active?.Id == row.Id) ? Visibility.Visible : Visibility.Collapsed;
         }
         TodayTotal.Text = $"{Rounding.ToTenthHours(grand):0.0} h";
 
@@ -132,7 +133,7 @@ public partial class MainWindow : Window
             PrimaryBtn.ToolTip = $"Start {sel.Code}";
             HintText.Text = "Double-click a project, or select it and press start.";
         }
-        else if (sel.Code == tracker.Active?.Code)
+        else if (sel.Id == tracker.Active?.Id)
         {
             PrimaryBtn.Content = "■";
             PrimaryBtn.Background = (Brush)FindResource("Live");
@@ -154,7 +155,7 @@ public partial class MainWindow : Window
         var sel = Selected;
         if (sel is null) return;
 
-        if (tracker.IsRunning && sel.Code == tracker.Active?.Code) A.StopWithPrompt();
+        if (tracker.IsRunning && sel.Id == tracker.Active?.Id) A.StopWithPrompt();
         else A.StartOrSwitch(sel.Project);
     }
 
@@ -211,6 +212,7 @@ public partial class MainWindow : Window
 public sealed class ProjectRow : INotifyPropertyChanged
 {
     public Project Project { get; }
+    public string Id => Project.Id;
     public string Code => Project.Code;
     public Brush Swatch { get; }
 

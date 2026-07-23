@@ -1,6 +1,7 @@
 using System.IO;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Threading;
 using Microsoft.Win32;
@@ -40,6 +41,13 @@ public partial class App : Application
     public event Action? Tick;
     /// <summary>Fires when tracking state changes (start/switch/stop, project edits).</summary>
     public event Action? StateChanged;
+    /// <summary>Fires when Windows' theme/accent colour actually changes (see
+    /// OnSystemUserPreferenceChanged). Most themed colours are DynamicResource lookups that pick
+    /// this up on their own for free; this is only for the handful of spots that instead cache a
+    /// FindResource'd brush on a persistent (Hide/Show-reused, not recreated) window and only
+    /// repaint it on their own existing refresh cadence — e.g. PillWindow's idle-dot fallback
+    /// colour, which otherwise wouldn't repaint until the next actual start/stop/switch.</summary>
+    public event Action? ThemeChanged;
 
     public static new App Current => (App)Application.Current;
 
@@ -67,6 +75,14 @@ public partial class App : Application
 
         ApplyTheme();
         ApplySystemAccent();
+        // Windows raises this (via a dedicated message-only window SystemEvents owns) whenever
+        // theme/accent settings change in Settings > Personalization — General covers light/dark
+        // mode, Color covers the accent colour. Re-running the same two Apply* calls used at
+        // startup is enough to re-skin the whole app live: every themed colour in the app is a
+        // DynamicResource lookup (see ApplySystemAccent's remarks), and WPF's DynamicResource
+        // resolution already re-notifies every consumer on its own once the dictionaries backing
+        // it change — no per-window/per-control code needed here beyond that.
+        SystemEvents.UserPreferenceChanged += OnSystemUserPreferenceChanged;
 
         Paths = new AppPaths();
         Store = new JsonStore(Paths);
@@ -119,6 +135,11 @@ public partial class App : Application
     /// timesheet view) that need to match their native OS chrome to it.</summary>
     public bool IsLightTheme { get; private set; } = true;
 
+    // Tracks the dictionary each Apply* last inserted, so re-running them on a live theme/accent
+    // change replaces it in place instead of layering another copy on top every time.
+    private ResourceDictionary? _themeDict;
+    private ResourceDictionary? _accentDict;
+
     private void ApplyTheme()
     {
         bool light = true;
@@ -135,7 +156,9 @@ public partial class App : Application
         {
             Source = new Uri($"Themes/{(light ? "Light" : "Dark")}.xaml", UriKind.Relative)
         };
+        if (_themeDict is not null) Resources.MergedDictionaries.Remove(_themeDict);
         Resources.MergedDictionaries.Insert(0, dict);
+        _themeDict = dict;
     }
 
     /// <summary>
@@ -148,10 +171,37 @@ public partial class App : Application
     {
         if (!SystemAccent.TryGetAccentColor(out var accent)) return;
         var ink = SystemAccent.ReadableInk(accent);
-        Resources.MergedDictionaries.Add(new ResourceDictionary
+        var dict = new ResourceDictionary
         {
             { "Accent", new SolidColorBrush(accent) },
             { "AccentInk", new SolidColorBrush(ink) },
+        };
+        if (_accentDict is not null) Resources.MergedDictionaries.Remove(_accentDict);
+        Resources.MergedDictionaries.Add(dict);
+        _accentDict = dict;
+    }
+
+    /// <summary>Re-skins the whole app the moment Windows' theme/accent colour actually changes,
+    /// rather than only picking it up on the next launch. SystemEvents raises this off the UI
+    /// thread (its own message-only window), so the actual work is marshalled back via
+    /// Dispatcher; the two Apply* calls are cheap (a handful of resource lookups), and open
+    /// windows using a borderless/no-native-chrome style don't need anything beyond that — except
+    /// the one DWM caption-colour attribute (DarkTitleBar), which isn't resource-driven and so is
+    /// explicitly refreshed for every currently-open window.</summary>
+    private void OnSystemUserPreferenceChanged(object? sender, UserPreferenceChangedEventArgs e)
+    {
+        if (e.Category != UserPreferenceCategory.General && e.Category != UserPreferenceCategory.Color) return;
+        Dispatcher.BeginInvoke(() =>
+        {
+            ApplyTheme();
+            ApplySystemAccent();
+            foreach (Window w in Windows)
+            {
+                if (!w.IsLoaded) continue;
+                try { DarkTitleBar.Apply(new WindowInteropHelper(w).Handle, !IsLightTheme); }
+                catch (InvalidOperationException) { /* handle not yet created — nothing to re-skin */ }
+            }
+            ThemeChanged?.Invoke();
         });
     }
 
@@ -213,7 +263,7 @@ public partial class App : Application
     /// <summary>Start or switch to a project, prompting for a note on any block being ended.</summary>
     public void StartOrSwitch(Project project)
     {
-        if (Tracker.IsRunning && Tracker.Active is { } ending && ending.Code != project.Code)
+        if (Tracker.IsRunning && Tracker.Active is { } ending && ending.Id != project.Id)
         {
             var note = MaybeAskNote(ending);
             Tracker.StartOrSwitch(project, note);
@@ -235,7 +285,10 @@ public partial class App : Application
     /// <summary>Resume the last project (pill Start toggle when stopped).</summary>
     public void ResumeLast() => Tracker.ResumeLast();
 
-    private string MaybeAskNote(Project ending)
+    /// <summary>Prompt for an optional note if Settings.PromptForNote is on, else "". Internal
+    /// (not private) so other flows that bank a block outside the normal start/switch/stop path
+    /// — e.g. AddTimeDialog's manual entry — go through the same configured behaviour.</summary>
+    internal string MaybeAskNote(Project ending)
     {
         if (!Settings.PromptForNote) return "";
         return NotePrompt.Ask(ending) ?? "";
@@ -312,6 +365,7 @@ public partial class App : Application
     public void QuitApp()
     {
         IsQuitting = true;
+        SystemEvents.UserPreferenceChanged -= OnSystemUserPreferenceChanged;
         _uiTimer?.Stop();
         _idle?.Dispose();
         _hotkeys?.Dispose();

@@ -120,6 +120,101 @@
         </Setter>
     </Style>
 
+    <!-- Themed dropdown — matches Input's visual language (rounded, Surface2, BorderStrong) with
+         a Surface2 popup card in the same style as the app's other flyouts (rounded, drop-shadow).
+         First ComboBox style in the app; used by the timesheet settings popover's snap/duration
+         pickers. -->
+    <Style x:Key="Dropdown" TargetType="ComboBox">
+        <Setter Property="FontFamily" Value="{StaticResource UiFont}"/>
+        <Setter Property="FontSize" Value="13"/>
+        <Setter Property="Foreground" Value="{DynamicResource Text}"/>
+        <Setter Property="Background" Value="{DynamicResource Surface2}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource BorderStrong}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="Padding" Value="10,7"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="SnapsToDevicePixels" Value="True"/>
+        <Setter Property="ItemContainerStyle">
+            <Setter.Value>
+                <Style TargetType="ComboBoxItem">
+                    <Setter Property="Padding" Value="10,6"/>
+                    <Setter Property="Foreground" Value="{DynamicResource Text}"/>
+                    <Setter Property="Background" Value="Transparent"/>
+                    <Setter Property="Cursor" Value="Hand"/>
+                    <Setter Property="Template">
+                        <Setter.Value>
+                            <ControlTemplate TargetType="ComboBoxItem">
+                                <Border x:Name="b" Background="{TemplateBinding Background}" CornerRadius="6"
+                                        Padding="{TemplateBinding Padding}" Margin="3,1">
+                                    <ContentPresenter/>
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsHighlighted" Value="True">
+                                        <Setter TargetName="b" Property="Background" Value="{DynamicResource Surface3}"/>
+                                    </Trigger>
+                                    <Trigger Property="IsSelected" Value="True">
+                                        <Setter TargetName="b" Property="Background" Value="{DynamicResource Accent}"/>
+                                        <Setter Property="Foreground" Value="{DynamicResource AccentInk}"/>
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Setter.Value>
+                    </Setter>
+                </Style>
+            </Setter.Value>
+        </Setter>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ComboBox">
+                    <Grid>
+                        <Border x:Name="MainBorder" CornerRadius="8" Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"/>
+                        <ToggleButton x:Name="Toggle" Background="Transparent" BorderThickness="0" ClickMode="Press" Focusable="False"
+                                      IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
+                            <ToggleButton.Template>
+                                <ControlTemplate TargetType="ToggleButton">
+                                    <Border Background="{TemplateBinding Background}"/>
+                                </ControlTemplate>
+                            </ToggleButton.Template>
+                        </ToggleButton>
+                        <Grid Margin="{TemplateBinding Padding}" IsHitTestVisible="False">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <ContentPresenter Grid.Column="0" Content="{TemplateBinding SelectionBoxItem}"
+                                               ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
+                                               VerticalAlignment="Center" HorizontalAlignment="Left"/>
+                            <TextBlock Grid.Column="1" Text="▾" FontSize="10" Foreground="{DynamicResource TextFaint}"
+                                       VerticalAlignment="Center" Margin="8,0,0,0"/>
+                        </Grid>
+                        <Popup x:Name="Popup" Placement="Bottom" IsOpen="{TemplateBinding IsDropDownOpen}"
+                               AllowsTransparency="True" Focusable="False" PopupAnimation="Fade">
+                            <Border Background="{DynamicResource Surface2}" BorderBrush="{DynamicResource BorderStrong}"
+                                    BorderThickness="1" CornerRadius="8" MaxHeight="220" Margin="0,4,0,0"
+                                    MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}">
+                                <Border.Effect>
+                                    <DropShadowEffect BlurRadius="10" ShadowDepth="2" Opacity="0.3"/>
+                                </Border.Effect>
+                                <ScrollViewer Margin="2" VerticalScrollBarVisibility="Auto">
+                                    <StackPanel IsItemsHost="True"/>
+                                </ScrollViewer>
+                            </Border>
+                        </Popup>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="MainBorder" Property="Background" Value="{DynamicResource Surface3}"/>
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                            <Setter TargetName="MainBorder" Property="BorderBrush" Value="{DynamicResource Accent}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- Slim themed scrollbar (implicit — applies to every ScrollBar in the app, replacing the
          stock OS chrome inside ScrollViewer/ListBox templates without touching those files). -->
     <Style TargetType="ScrollBar">

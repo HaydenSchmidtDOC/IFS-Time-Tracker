@@ -29,8 +29,10 @@ public partial class AddProjectDialog : Window
             SaveBtn.Content = "Save changes";
             ColorHelpText.Text = "Drag to change the colour.";
             CodeBox.Text = editing.Code;
-            CodeBox.IsEnabled = false; // code is the stable key used in the log; keep it fixed
-            CodeBox.Opacity = 0.65;
+            // Code used to be locked here because it was the only identity a historical block
+            // could be matched back to — renaming it would have orphaned every past entry's
+            // colour/label lookup. Now that Project.Id is the real stable key (see Models.cs)
+            // and blocks/state resolve by it first, Code is just another editable field.
             AsnBox.Text = editing.Asn;
             NameBox.Text = editing.Name;
             _color = editing.Color;
@@ -60,7 +62,7 @@ public partial class AddProjectDialog : Window
         return d._result;
     }
 
-    /// <summary>Edit an existing project's ASN/name/colour (code stays fixed). Returns the updated project, or null if cancelled.</summary>
+    /// <summary>Edit an existing project's code/ASN/name/colour. Returns the updated project, or null if cancelled.</summary>
     public static Project? Edit(Window owner, Project project, IReadOnlyList<Project> others)
     {
         var d = new AddProjectDialog(others, project) { Owner = owner };
@@ -100,12 +102,14 @@ public partial class AddProjectDialog : Window
         var asn = AsnBox.Text.Trim();
 
         if (string.IsNullOrWhiteSpace(code)) { ShowError("Project code is required."); return; }
-        if (string.IsNullOrWhiteSpace(asn)) { ShowError("ASN number is required."); return; }
-        if (_editing is null && _existing.Any(p => string.Equals(p.Code, code, StringComparison.OrdinalIgnoreCase)))
+        // ASN is optional — IFS doesn't always have one assigned yet when a project is first
+        // being tracked, and the export mapping tolerates a blank field.
+        if (_existing.Any(p => string.Equals(p.Code, code, StringComparison.OrdinalIgnoreCase)))
         { ShowError($"A project with code \"{code}\" already exists."); return; }
 
         if (_editing is not null)
         {
+            _editing.Code = code;
             _editing.Asn = asn;
             _editing.Name = NameBox.Text.Trim();
             _editing.Color = _color;

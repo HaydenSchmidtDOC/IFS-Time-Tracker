@@ -46,6 +46,10 @@ public partial class PillWindow : Window
         Loaded += OnLoaded;
         A.Tick += UpdateTime;
         A.StateChanged += UpdateState;
+        // The idle-dot fallback colour (RefreshContent, below) is a FindResource lookup only
+        // re-run on a state change — without this it'd stay stale after a live theme flip until
+        // the next actual start/stop/switch.
+        A.ThemeChanged += UpdateState;
     }
 
     private void OnLoaded(object? sender, RoutedEventArgs e)

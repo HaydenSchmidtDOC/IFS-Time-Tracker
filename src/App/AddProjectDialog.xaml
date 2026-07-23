@@ -66,7 +66,7 @@
             <TextBlock Text="PROJECT CODE" Style="{StaticResource EyebrowText}" Margin="0,14,0,4"/>
             <TextBox x:Name="CodeBox" Style="{StaticResource Input}" MaxLength="40"/>
 
-            <TextBlock Text="ASN NUMBER" Style="{StaticResource EyebrowText}" Margin="0,12,0,4"/>
+            <TextBlock Text="ASN NUMBER (OPTIONAL)" Style="{StaticResource EyebrowText}" Margin="0,12,0,4"/>
             <TextBox x:Name="AsnBox" Style="{StaticResource Input}" MaxLength="40"/>
 
             <TextBlock Text="DESCRIPTION (OPTIONAL)" Style="{StaticResource EyebrowText}" Margin="0,12,0,4"/>

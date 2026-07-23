@@ -5,10 +5,20 @@ namespace TimeTracker.Core;
 /// <summary>A trackable project, matching IFS timesheet identity (code + ASN).</summary>
 public sealed class Project
 {
-    /// <summary>IFS project code, e.g. "BRIDGE-42". Used as the stable key.</summary>
+    /// <summary>
+    /// Stable internal identity, assigned once and never changed — this, not <see cref="Code"/>,
+    /// is what historical blocks and live state actually reference, so Code/Name/Asn can all be
+    /// edited freely (e.g. correcting a typo, or IFS renumbering a project) without corrupting
+    /// history or losing the resume-on-restart pointer. Projects loaded from before this field
+    /// existed get one back-filled on load (see JsonStore.LoadProjects); new projects get one in
+    /// TrackerService.AddProject/UpdateProjects.
+    /// </summary>
+    public string Id { get; set; } = "";
+
+    /// <summary>IFS project code, e.g. "BRIDGE-42". Editable — see <see cref="Id"/> for the actual stable key.</summary>
     public string Code { get; set; } = "";
 
-    /// <summary>IFS ASN (activity sequence) number.</summary>
+    /// <summary>IFS ASN (activity sequence) number. Optional.</summary>
     public string Asn { get; set; } = "";
 
     /// <summary>Friendly description shown in the UI.</summary>
@@ -24,6 +34,22 @@ public sealed class Project
 /// <summary>One completed unit of tracked work — a single row in the monthly CSV.</summary>
 public sealed class TimeBlock
 {
+    /// <summary>
+    /// Stable identity for this block, so it can be found again for delete/update without
+    /// relying on its timestamps staying exact (which drag-to-edit will change). Rows written
+    /// before this field existed have no stored id; CsvLog synthesizes a deterministic one from
+    /// their code+start+end on read, so old rows can still be targeted, just less robustly than
+    /// new ones (that synthetic id changes if the row's own text changes).
+    /// </summary>
+    public string Id { get; set; } = "";
+
+    /// <summary>
+    /// Id of the <see cref="Project"/> this block was recorded against. Empty for rows logged
+    /// before project ids existed — those fall back to matching on <see cref="ProjectCode"/>
+    /// (see TrackerService.FindByBlock).
+    /// </summary>
+    public string ProjectId { get; set; } = "";
+
     public string ProjectCode { get; set; } = "";
     public string Asn { get; set; } = "";
     public string ProjectName { get; set; } = "";
@@ -40,13 +66,23 @@ public sealed class TimeBlock
 /// <summary>Persisted "what is live right now" so a restart resumes cleanly.</summary>
 public sealed class TrackerState
 {
-    /// <summary>Code of the project currently being tracked, or null if stopped.</summary>
+    /// <summary>Id of the project currently being tracked, or null if stopped.</summary>
+    public string? ActiveProjectId { get; set; }
+
+    /// <summary>
+    /// Code of the project currently being tracked, kept alongside <see cref="ActiveProjectId"/>
+    /// purely so state.json stays human-readable — resolution always prefers the Id, falling
+    /// back to this only for a state.json saved before ids existed.
+    /// </summary>
     public string? ActiveProjectCode { get; set; }
 
     /// <summary>UTC start of the current running block, or null if stopped.</summary>
     public DateTime? BlockStartUtc { get; set; }
 
-    /// <summary>Last project tracked, so the pill's Start button can resume after a stop.</summary>
+    /// <summary>Id of the last project tracked, so the pill's Start button can resume after a stop.</summary>
+    public string? LastActiveProjectId { get; set; }
+
+    /// <summary>Code counterpart of <see cref="LastActiveProjectId"/> — see its remarks.</summary>
     public string? LastActiveProjectCode { get; set; }
 
     /// <summary>Whether the floating pill is shown.</summary>

@@ -5,77 +5,6 @@
         WindowStartupLocation="CenterOwner" WindowStyle="None" AllowsTransparency="True"
         Background="Transparent" ResizeMode="NoResize" ShowInTaskbar="False"
         FontFamily="{StaticResource UiFont}">
-    <Window.Resources>
-        <!-- Density slider: 7 evenly-spaced index positions (0-6), not a continuous range — the
-             presets themselves (0/.05/.1/.25/.5/1/2h) aren't evenly spaced, so the slider drives
-             an index and code maps that to the real value. Notch dots + a filled track segment
-             give the snap points a visible target instead of a plain bare handle. -->
-        <Style x:Key="DensitySliderStyle" TargetType="Slider">
-            <Setter Property="Minimum" Value="0"/>
-            <Setter Property="Maximum" Value="6"/>
-            <Setter Property="IsSnapToTickEnabled" Value="True"/>
-            <Setter Property="TickFrequency" Value="1"/>
-            <Setter Property="Height" Value="30"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Slider">
-                        <Grid VerticalAlignment="Center">
-                            <Border Height="4" CornerRadius="2" Margin="10,0" Background="{DynamicResource Surface3}"/>
-                            <Grid Margin="19,0">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="*"/>
-                                </Grid.ColumnDefinitions>
-                                <Ellipse Grid.Column="0" Width="6" Height="6" Fill="{DynamicResource BorderStrong}" HorizontalAlignment="Left"/>
-                                <Ellipse Grid.Column="1" Width="6" Height="6" Fill="{DynamicResource BorderStrong}" HorizontalAlignment="Center"/>
-                                <Ellipse Grid.Column="2" Width="6" Height="6" Fill="{DynamicResource BorderStrong}" HorizontalAlignment="Center"/>
-                                <Ellipse Grid.Column="3" Width="6" Height="6" Fill="{DynamicResource BorderStrong}" HorizontalAlignment="Center"/>
-                                <Ellipse Grid.Column="4" Width="6" Height="6" Fill="{DynamicResource BorderStrong}" HorizontalAlignment="Center"/>
-                                <Ellipse Grid.Column="5" Width="6" Height="6" Fill="{DynamicResource BorderStrong}" HorizontalAlignment="Center"/>
-                                <Ellipse Grid.Column="6" Width="6" Height="6" Fill="{DynamicResource BorderStrong}" HorizontalAlignment="Right"/>
-                            </Grid>
-                            <Track x:Name="PART_Track" Margin="10,0">
-                                <Track.DecreaseRepeatButton>
-                                    <RepeatButton Command="Slider.DecreaseLarge">
-                                        <RepeatButton.Template>
-                                            <ControlTemplate TargetType="RepeatButton"><Rectangle Fill="Transparent"/></ControlTemplate>
-                                        </RepeatButton.Template>
-                                    </RepeatButton>
-                                </Track.DecreaseRepeatButton>
-                                <Track.IncreaseRepeatButton>
-                                    <RepeatButton Command="Slider.IncreaseLarge">
-                                        <RepeatButton.Template>
-                                            <ControlTemplate TargetType="RepeatButton"><Rectangle Fill="Transparent"/></ControlTemplate>
-                                        </RepeatButton.Template>
-                                    </RepeatButton>
-                                </Track.IncreaseRepeatButton>
-                                <Track.Thumb>
-                                    <Thumb>
-                                        <Thumb.Template>
-                                            <ControlTemplate TargetType="Thumb">
-                                                <Ellipse Width="18" Height="18" Fill="{DynamicResource Accent}"
-                                                         Stroke="{DynamicResource Surface}" StrokeThickness="2">
-                                                    <Ellipse.Effect>
-                                                        <DropShadowEffect BlurRadius="5" ShadowDepth="1" Opacity="0.3"/>
-                                                    </Ellipse.Effect>
-                                                </Ellipse>
-                                            </ControlTemplate>
-                                        </Thumb.Template>
-                                    </Thumb>
-                                </Track.Thumb>
-                            </Track>
-                        </Grid>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-    </Window.Resources>
-
     <Border Background="{DynamicResource Surface}" CornerRadius="12" Margin="12">
         <Border.Effect>
             <DropShadowEffect BlurRadius="10" ShadowDepth="2" Opacity="0.34" Color="#161C2A"/>
@@ -156,26 +85,6 @@
                     </Grid>
                     <TextBlock Text="Leave blank to use the default location above. Changing this takes effect after restarting the app."
                                FontSize="11" Foreground="{DynamicResource TextFaint}" Margin="0,6,0,0" TextWrapping="Wrap"/>
-
-                    <Border Height="1" Background="{DynamicResource Border}" Margin="0,18"/>
-
-                    <!-- ===== Timesheet chart ===== -->
-                    <TextBlock Text="TIMESHEET CHART" Style="{StaticResource EyebrowText}" Margin="0,0,0,4"/>
-                    <TextBlock Text="Both settings below are display only — they never change recorded data or the IFS export, only how the chart draws it."
-                               FontSize="11" Foreground="{DynamicResource TextFaint}" TextWrapping="Wrap" Margin="0,0,0,10"/>
-
-                    <CheckBox x:Name="MergeSessionsCheck" Content="Merge every session for a project into one bar"
-                              Foreground="{DynamicResource Text}" FontSize="13" Margin="0,0,0,4"
-                              Checked="MergeSessionsCheck_Changed" Unchecked="MergeSessionsCheck_Changed"/>
-                    <TextBlock Text="Off: only back-to-back sessions with a matching note merge — the same project touched again later in the day gets its own bar."
-                               FontSize="11" Foreground="{DynamicResource TextFaint}" TextWrapping="Wrap" Margin="0,0,0,14"/>
-
-                    <TextBlock Text="Groups a day's small segments into one &quot;Other&quot; bar (hover it for the exact breakdown)."
-                               FontSize="11" Foreground="{DynamicResource TextFaint}" TextWrapping="Wrap" Margin="0,0,0,10"/>
-                    <Slider x:Name="DensitySlider" Style="{StaticResource DensitySliderStyle}"
-                            ValueChanged="DensitySlider_ValueChanged"/>
-                    <TextBlock x:Name="DensityValueText" FontSize="11" Foreground="{DynamicResource TextDim}"
-                               FontFamily="{StaticResource MonoFont}" HorizontalAlignment="Center" Margin="0,4,0,0"/>
 
                     <Border Height="1" Background="{DynamicResource Border}" Margin="0,18"/>
 

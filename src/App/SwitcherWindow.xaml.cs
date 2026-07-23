@@ -24,8 +24,8 @@ public partial class SwitcherWindow : Window
         List.ItemsSource = _rows;
 
         // Start highlighted on the live project (or the first project).
-        var liveCode = A.Tracker.Active?.Code;
-        _hi = Math.Max(0, _rows.ToList().FindIndex(r => r.Code == liveCode));
+        var liveId = A.Tracker.Active?.Id;
+        _hi = Math.Max(0, _rows.ToList().FindIndex(r => r.Id == liveId));
         UpdateHighlight();
 
         Loaded += (_, _) => Activate();
@@ -47,7 +47,7 @@ public partial class SwitcherWindow : Window
             var row = _rows[i];
             row.RowBg = on ? Tint(row.Project.Color, 0.18) : Brushes.Transparent;
 
-            bool isLive = A.Tracker.IsRunning && row.Code == A.Tracker.Active?.Code;
+            bool isLive = A.Tracker.IsRunning && row.Id == A.Tracker.Active?.Id;
             if (isLive)
             {
                 // Confirming the already-live row stops tracking instead of a no-op "switch to
@@ -73,7 +73,7 @@ public partial class SwitcherWindow : Window
         if (_rows.Count == 0) { Close(); return; }
         var chosen = _rows[_hi].Project;
         _closing = true;
-        bool isLive = A.Tracker.IsRunning && chosen.Code == A.Tracker.Active?.Code;
+        bool isLive = A.Tracker.IsRunning && chosen.Id == A.Tracker.Active?.Id;
         if (isLive) A.StopWithPrompt();
         else A.StartOrSwitch(chosen);
         Close();
@@ -110,11 +110,12 @@ public partial class SwitcherWindow : Window
 public sealed class SwitchRow : INotifyPropertyChanged
 {
     public Project Project { get; }
+    public string Id => Project.Id;
     public string Code => Project.Code;
     public string AsnText => $"ASN {Project.Asn}";
     public Brush Swatch { get; }
     public Visibility LiveVisibility =>
-        App.Current.Tracker.IsRunning && App.Current.Tracker.Active?.Code == Code
+        App.Current.Tracker.IsRunning && App.Current.Tracker.Active?.Id == Id
             ? Visibility.Visible : Visibility.Collapsed;
 
     private Brush _rowBg = Brushes.Transparent;

@@ -26,10 +26,118 @@ public partial class TimesheetWindow : Window
     private FrameworkElement? _currentChart;
     private DateTime _lastWheelNav = DateTime.MinValue;
 
+    /// <summary>Which of the two timesheet renderers is showing. Not persisted mid-session — see
+    /// AnimateOpenFrom, which resets this to Settings.DefaultTimesheetView on every open.</summary>
+    private enum ViewMode { Bar, Calendar }
+    private ViewMode _viewMode;
+    private readonly SegmentedToggle _viewToggle;
+
+    // Calendar view remembers its own scroll offset across the once-a-second rebuild (see
+    // OnTick) so a live block's growth doesn't keep yanking the user back to the top — but resets
+    // to null (re-centering on the work-hours default) every time the view is freshly switched
+    // INTO, per SelectionChanged below, rather than persisting indefinitely.
+    private double? _calendarScrollOffset;
+
+    /// <summary>
+    /// Live state for an in-progress calendar-view drag (edge-resize or whole-block move) —
+    /// see BuildCalendar's drag-handling section, where it's created/consumed. Null whenever
+    /// nothing is being dragged. Instance-level (not local to BuildCalendar) because it has to
+    /// survive between separate MouseDown/MouseMove/MouseUp event callbacks, which the canvas-
+    /// level handlers below check on every tick/resize/state-change to avoid a full rebuild
+    /// ripping the dragged element out from under an active mouse capture.
+    /// </summary>
+    private sealed class DragState
+    {
+        public required bool IsResize;
+        public required bool ResizeTop; // only meaningful when IsResize
+        public required TimeBlock Block;
+        public required Border Element; // mutated live (Canvas.Top/Height/Left) as the mouse moves
+        /// <summary>The day this block actually belongs to on disk — fixed for the whole drag,
+        /// used to locate/exclude its own row. For a whole-block move, that's not necessarily the
+        /// day it's CURRENTLY hovering over any more — see CurrentDay.</summary>
+        public required DateTime Day;
+        public required double StartMouseY;
+        public required double OrigTop, OrigHeight;
+        /// <summary>Clamp range for the value actually being dragged: newTop for a top-edge
+        /// resize or a whole-block move, newBottom for a bottom-edge resize.</summary>
+        public required double LowBound, HighBound;
+        // Edge-resize only: the one immediate neighbour whose facing edge tracks along — never
+        // the live block (that's treated as a hard stop instead, see BeginResize).
+        public TimeBlock? Neighbor;
+        public Border? NeighborElement;
+        public double NeighborOrigTop, NeighborOrigHeight;
+
+        // Whole-block move only (IsResize false) — lets a block be dragged to a different day
+        // column, not just up/down within its own. Resize never touches these.
+        public double StartMouseX;
+        public double OrigLeft;
+        /// <summary>Which day column the block is CURRENTLY hovering over, live-updated on every
+        /// MouseMove as it crosses column boundaries — starts equal to Day, may end up different
+        /// by MouseUp.</summary>
+        public DateTime CurrentDay;
+    }
+    private DragState? _drag;
+
+    // Fixed reference point every breathing animation's phase is computed against — see
+    // BreathingAnimation. Doesn't need to mean anything beyond "process start"; it only matters
+    // that every call site measures phase against the SAME instant.
+    private static readonly DateTime AnimationEpoch = DateTime.UtcNow;
+
+    /// <summary>
+    /// A continuous, phase-locked autoreverse pulse from <paramref name="from"/> to <paramref
+    /// name="to"/> and back, every <paramref name="half"/> each way.
+    ///
+    /// The live block's canvas is fully rebuilt from scratch every second (see OnTick) to grow
+    /// it — so its "still recording" pulse (a border/dot opacity animation) was being
+    /// re-triggered from scratch each time too, restarting at `from` every ~1s. Since the
+    /// one-shot ramp (900ms) doesn't evenly divide the ~1000ms rebuild interval, that produced a
+    /// visible snap back to the dim/faint end of the range at the start of each new cycle instead
+    /// of a smooth breathe — reported as the live indicator "growing then cutting back to
+    /// nothing". Fixing it doesn't mean making the animation not restart (it has to — the
+    /// element itself is brand new); it means giving each new instance a BeginTime far enough in
+    /// the past that a Forever/AutoReverse timeline picks up exactly where the LAST instance's
+    /// would be right now, so consecutive instances read as one uninterrupted breathing loop.
+    /// </summary>
+    private static DoubleAnimation BreathingAnimation(double from, double to, TimeSpan half)
+    {
+        double cycleMs = half.TotalMilliseconds * 2;
+        double phaseMs = (DateTime.UtcNow - AnimationEpoch).TotalMilliseconds % cycleMs;
+        return new DoubleAnimation(from, to, half)
+        {
+            AutoReverse = true,
+            RepeatBehavior = RepeatBehavior.Forever,
+            BeginTime = TimeSpan.FromMilliseconds(-phaseMs),
+            EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut },
+        };
+    }
+
+    /// <summary>True while a calendar-view delete confirmation ("Delete this block?") is showing.
+    /// Same rationale as _drag: the whole canvas rebuilds every second while a live session
+    /// ticks, and that popup is a plain child of THIS render's canvas — an untracked rebuild
+    /// would silently wipe it out from under the user before they can click either button.</summary>
+    private bool _confirmingDelete;
+
+    /// <summary>Whether an interactive, in-progress calendar-view gesture owns the canvas right
+    /// now — the shared guard against the once-a-second/resize/state-change auto-rebuilds
+    /// tearing it out from under the user (see _drag, _confirmingDelete).</summary>
+    private bool SuspendRerender => _drag is not null || _confirmingDelete;
+
     public TimesheetWindow()
     {
         InitializeComponent();
         _weekStart = StartOfWeek(DateTime.Today);
+        _viewMode = A.Settings.DefaultTimesheetView == "Calendar" ? ViewMode.Calendar : ViewMode.Bar;
+
+        _viewToggle = new SegmentedToggle("Totals", "Calendar", _viewMode == ViewMode.Calendar ? 1 : 0, fontSize: 11.5);
+        _viewToggle.SelectionChanged += idx =>
+        {
+            _viewMode = idx == 1 ? ViewMode.Calendar : ViewMode.Bar;
+            _calendarScrollOffset = null; // re-center on work hours each time Calendar is switched into
+            CalendarPxPerHour = 60; // and reset any zoom from a prior calendar session
+            RenderCurrentWeek(0, crossFade: true);
+        };
+        ViewToggleHost.Content = _viewToggle.Root;
+        InitTimesheetSettingsPopover();
 
         SourceInitialized += (_, _) =>
             DarkTitleBar.Apply(new WindowInteropHelper(this).Handle, !A.IsLightTheme);
@@ -45,14 +153,17 @@ public partial class TimesheetWindow : Window
     private void OnStateChanged()
     {
         _cachedWeekStart = null;
-        if (IsVisible) RenderCurrentWeek(0);
+        // A drag in progress owns the canvas (and the mouse capture on one of its elements) —
+        // rebuilding out from under it would tear down the very Border being dragged. CommitDrag
+        // does its own re-render once the drag actually ends, picking this change up then.
+        if (IsVisible && !SuspendRerender) RenderCurrentWeek(0);
     }
 
     // Once a second: keep the still-running block's segment growing live. Cheap — reuses the
     // cached committed blocks and only recomputes today's aggregation, no disk I/O.
     private void OnTick()
     {
-        if (IsVisible) RenderCurrentWeek(0);
+        if (IsVisible && !SuspendRerender) RenderCurrentWeek(0);
     }
 
     private static DateTime StartOfWeek(DateTime d)
@@ -103,6 +214,12 @@ public partial class TimesheetWindow : Window
         // whatever got tracked while it was closed wouldn't show up until the cache happened
         // to be invalidated some other way (navigating weeks, deleting a block).
         _cachedWeekStart = null;
+        // Likewise, the view mode resets to the configured default each time the window is
+        // (re)opened rather than remembering whatever it was left on — see ViewMode's remarks.
+        _viewMode = A.Settings.DefaultTimesheetView == "Calendar" ? ViewMode.Calendar : ViewMode.Bar;
+        _calendarScrollOffset = null;
+        CalendarPxPerHour = 60;
+        _viewToggle.SetIndex(_viewMode == ViewMode.Calendar ? 1 : 0, animate: false);
         RenderCurrentWeek(0);
     }
 
@@ -180,6 +297,7 @@ public partial class TimesheetWindow : Window
 
     private void Navigate(int weeks)
     {
+        if (SuspendRerender) return; // mouse is captured mid-drag (or a delete confirm is showing) — rebuilding now would tear either out from under the user
         _weekStart = _weekStart.AddDays(7 * weeks);
         RenderCurrentWeek(weeks);
     }
@@ -205,7 +323,142 @@ public partial class TimesheetWindow : Window
         Navigate(e.Delta < 0 ? 1 : -1); // one notch = one week, snapped — not a continuous scroll
     }
 
-    private void ChartCard_SizeChanged(object sender, SizeChangedEventArgs e) => RenderCurrentWeek(0);
+    /// <summary>Shift+scroll = "side scroll" week navigation, the same convention used by
+    /// browsers/spreadsheets for a vertical wheel doubling as horizontal — works over EITHER
+    /// view. Wired as Preview (tunnelling) on the whole chart area, one level above everything
+    /// else in it (including the calendar view's own vertically-scrolling ScrollViewer), so it's
+    /// guaranteed to see the event and claim it (via ChartArea_MouseWheel's own e.Handled = true)
+    /// before that ScrollViewer's default wheel handling ever gets a chance to run — rather than
+    /// depending on a handler attached deeper in that view's own tree, nested inside whatever
+    /// element happens to be hit.</summary>
+    private void ChartArea_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        if ((Keyboard.Modifiers & ModifierKeys.Shift) == 0) return;
+        ChartArea_MouseWheel(sender, e); // shares the same debounce/direction logic; sets e.Handled itself
+    }
+
+    private void ChartCard_SizeChanged(object sender, SizeChangedEventArgs e) { if (!SuspendRerender) RenderCurrentWeek(0); }
+
+    /// <summary>Ctrl+scroll over the calendar view (see the PreviewMouseWheel hookup in
+    /// BuildCalendar) zooms the hour scale in/out, keeping whichever hour is currently centred in
+    /// the viewport anchored there — so zooming in/out doesn't also jump you to a different part
+    /// of the day.</summary>
+    private void ZoomCalendar(int direction, double viewportHeight)
+    {
+        if (SuspendRerender) return; // don't rebuild the canvas out from under an active drag/popup
+        double centerOffset = (_calendarScrollOffset ?? 0) + viewportHeight / 2;
+        double centerHour = centerOffset / CalendarPxPerHour;
+
+        double factor = direction > 0 ? 1.15 : 1 / 1.15;
+        CalendarPxPerHour = Math.Clamp(CalendarPxPerHour * factor, MinCalendarPxPerHour, MaxCalendarPxPerHour);
+
+        _calendarScrollOffset = centerHour * CalendarPxPerHour - viewportHeight / 2;
+        RenderCurrentWeek(0);
+    }
+
+    /// <summary>Header "+" button — manual time entry, defaulted to today. Calendar view's
+    /// double-click-to-add (see BuildCalendar) is the other entry point into the same dialog.</summary>
+    private void AddTime_Click(object sender, RoutedEventArgs e)
+    {
+        bool added = AddTimeDialog.Ask(this, DateTime.Today);
+        if (added) { _cachedWeekStart = null; RenderCurrentWeek(0); }
+    }
+
+    // ==================== timesheet settings popover ====================
+    // Every timesheet-VIEW setting lives here, and only here — not the main Settings window —
+    // so there's exactly one place to look. Every control live-applies (write straight to
+    // Settings, save, re-render if it affects the current render) rather than buffering into a
+    // working copy for an explicit Save button; the popover has no Save/Cancel of its own.
+
+    private static readonly int[] EdgeSnapOptions = { 5, 10, 15, 20, 30 };
+    private static readonly int[] MoveSnapOptions = { 1, 5, 10, 15 };
+    private static readonly int[] ManualMaxOptions = { 15, 30, 45, 60, 90 };
+    // The presets aren't evenly spaced (fine-grained near zero, coarser further out) — see
+    // DensitySliderStyle in the XAML, an index-based slider rather than a continuous range.
+    private static readonly double[] DensityPresets = { 0, 0.05, 0.1, 0.25, 0.5, 1, 2 };
+
+    private SegmentedToggle _defaultViewToggle = null!;
+
+    private void TimesheetSettings_Click(object sender, RoutedEventArgs e)
+        => TimesheetSettingsPopup.IsOpen = !TimesheetSettingsPopup.IsOpen;
+
+    private void InitTimesheetSettingsPopover()
+    {
+        var s = A.Settings;
+
+        // "Totals" to match the main header's toggle wording exactly — the stored setting value
+        // ("Bar"/"Calendar") is an internal detail and doesn't need to match the label.
+        _defaultViewToggle = new SegmentedToggle("Totals", "Calendar", s.DefaultTimesheetView == "Calendar" ? 1 : 0, fontSize: 12);
+        _defaultViewToggle.SelectionChanged += idx =>
+        {
+            // Only affects what a FUTURE open starts on (see ViewMode's remarks) — doesn't touch
+            // _viewMode or re-render the currently-open session.
+            A.Settings.DefaultTimesheetView = idx == 1 ? "Calendar" : "Bar";
+            A.Store.SaveSettings(A.Settings);
+        };
+        DefaultViewToggleHost.Content = _defaultViewToggle.Root;
+
+        PopulateSnapCombo(EdgeSnapCombo, EdgeSnapOptions, s.EdgeSnapMinutes, v => A.Settings.EdgeSnapMinutes = v);
+        PopulateSnapCombo(MoveSnapCombo, MoveSnapOptions, s.MoveSnapMinutes, v => A.Settings.MoveSnapMinutes = v);
+        PopulateSnapCombo(ManualMaxCombo, ManualMaxOptions, s.ManualBlockMaxMinutes, v => A.Settings.ManualBlockMaxMinutes = v);
+
+        MergeSessionsCheck.IsChecked = s.ChartMergeAllSessions;
+        MergeSessionsCheck.Checked += MergeSessionsCheck_Changed;
+        MergeSessionsCheck.Unchecked += MergeSessionsCheck_Changed;
+
+        // If the saved value is already index 0, setting Value=0 below is a no-op and
+        // ValueChanged never fires — so the label text is applied explicitly here too, not
+        // left to only happen as a side effect of the event (same reasoning this had in
+        // SettingsWindow before this setting moved here).
+        int startIdx = ClosestDensityIndex(s.ChartMinSegmentHours);
+        DensitySlider.Value = startIdx;
+        RefreshDensityLabel(startIdx);
+        DensitySlider.ValueChanged += DensitySlider_ValueChanged;
+    }
+
+    /// <summary>Fills a snap/duration dropdown with fixed presets (inserting the current value if
+    /// it's somehow outside them, e.g. a hand-edited settings.json) and live-applies on change.</summary>
+    private static void PopulateSnapCombo(ComboBox combo, int[] presets, int current, Action<int> apply)
+    {
+        var items = Array.IndexOf(presets, current) >= 0 ? presets : presets.Append(current).OrderBy(x => x).ToArray();
+        combo.ItemsSource = items;
+        combo.SelectedItem = current;
+        combo.SelectionChanged += (_, _) =>
+        {
+            if (combo.SelectedItem is int v) { apply(v); A.Store.SaveSettings(A.Settings); }
+        };
+    }
+
+    private static int ClosestDensityIndex(double hours)
+    {
+        int best = 0;
+        double bestDiff = double.MaxValue;
+        for (int i = 0; i < DensityPresets.Length; i++)
+        {
+            double diff = Math.Abs(DensityPresets[i] - hours);
+            if (diff < bestDiff) { bestDiff = diff; best = i; }
+        }
+        return best;
+    }
+
+    private void DensitySlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        int idx = (int)Math.Round(e.NewValue);
+        A.Settings.ChartMinSegmentHours = DensityPresets[idx];
+        A.Store.SaveSettings(A.Settings);
+        RefreshDensityLabel(idx);
+        RenderCurrentWeek(0); // bar-view-only setting, but harmless (and cheap) to call in calendar view too
+    }
+
+    private void RefreshDensityLabel(int idx)
+        => DensityValueText.Text = DensityPresets[idx] <= 0 ? "Off" : $"Fold under {DensityPresets[idx]:0.##} h";
+
+    private void MergeSessionsCheck_Changed(object sender, RoutedEventArgs e)
+    {
+        A.Settings.ChartMergeAllSessions = MergeSessionsCheck.IsChecked == true;
+        A.Store.SaveSettings(A.Settings);
+        RenderCurrentWeek(0);
+    }
 
     // ==================== data + chart rendering ====================
 
@@ -237,7 +490,7 @@ public partial class TimesheetWindow : Window
         return _cachedBlocks;
     }
 
-    private void RenderCurrentWeek(int slideDirection)
+    private void RenderCurrentWeek(int slideDirection, bool crossFade = false)
     {
         WeekLabel.Text = FormatWeekLabel(_weekStart);
 
@@ -273,7 +526,7 @@ public partial class TimesheetWindow : Window
         {
             liveBlock = new TimeBlock
             {
-                ProjectCode = active.Code, Asn = active.Asn, ProjectName = active.Name,
+                ProjectId = active.Id, ProjectCode = active.Code, Asn = active.Asn, ProjectName = active.Name,
                 StartLocal = startUtc.ToLocalTime(), EndLocal = DateTime.Now,
                 DurationSeconds = A.Tracker.CurrentElapsedSeconds, Notes = "",
             };
@@ -286,7 +539,11 @@ public partial class TimesheetWindow : Window
 
         double w = ChartCard.ActualWidth > 40 ? ChartCard.ActualWidth - 40 : 820;
         double h = ChartCard.ActualHeight > 40 ? ChartCard.ActualHeight - 40 : 440;
-        SlideIn(BuildChart(byDay, liveBlock, w, h, today), slideDirection);
+        FrameworkElement visual = _viewMode == ViewMode.Calendar
+            ? BuildCalendar(byDay, liveBlock, w, h, today)
+            : BuildChart(byDay, liveBlock, w, h, today);
+        if (crossFade) CrossFade(visual);
+        else SlideIn(visual, slideDirection);
         RebuildLegend(byDay);
     }
 
@@ -304,9 +561,14 @@ public partial class TimesheetWindow : Window
         return Color.FromRgb(L(c.R), L(c.G), L(c.B));
     }
 
+    /// <summary>The floor below which the axis never shrinks — a full 8h workday should always
+    /// be visible on-scale, even on a week with only short/no entries, rather than making a
+    /// couple of hours look misleadingly like "most of the day".</summary>
+    private const double AxisFloorHours = 8;
+
     private static (double axisMax, double step) ComputeAxisScale(double rawMax)
     {
-        double axisMax = Math.Max(4, Math.Ceiling(rawMax / 2.0) * 2.0);
+        double axisMax = Math.Max(AxisFloorHours, Math.Ceiling(rawMax / 2.0) * 2.0);
         return (axisMax, axisMax / 4.0);
     }
 
@@ -331,12 +593,25 @@ public partial class TimesheetWindow : Window
     /// the below-threshold ones get folded into "Other".</summary>
     private sealed class SessionGroup
     {
+        /// <summary>Resolved live project, via TrackerService.FindByBlock — null if it's since
+        /// been deleted (the group is dropped rather than shown, same as before).</summary>
+        public required Project? Project;
+        /// <summary>Snapshot code from the block(s) that formed this group — only used to build
+        /// the identity key below, never for display (Project.Code is used for that so a rename
+        /// is reflected immediately, including for blocks recorded under the old code).</summary>
         public required string ProjectCode;
         public double Hours;
         public DateTime Latest = DateTime.MinValue;
         public bool ContainsLive;
         public string? Note;
     }
+
+    /// <summary>Identity key for grouping same-project blocks together even across a rename:
+    /// the resolved project's stable Id when it still exists, otherwise its recorded code (so
+    /// blocks of a since-deleted project still merge with each other, even though the group is
+    /// ultimately dropped for having no live Project to render).</summary>
+    private static string GroupKey(Project? resolved, string fallbackCode)
+        => resolved?.Id ?? ("code:" + fallbackCode.ToLowerInvariant());
 
     /// <summary>
     /// Groups a day's blocks into candidate segments, then folds anything under the configured
@@ -354,21 +629,22 @@ public partial class TimesheetWindow : Window
     /// collapse together — touching the same project again later, or with a different note,
     /// starts a fresh segment of its own.
     /// </summary>
-    private List<ChartSegment> BuildDaySegments(List<TimeBlock> dayBlocks, IReadOnlyList<Project> projects,
-        Brush otherFill, TimeBlock? liveBlock)
+    private List<ChartSegment> BuildDaySegments(List<TimeBlock> dayBlocks, Brush otherFill, TimeBlock? liveBlock)
     {
         double minHours = A.Settings.ChartMinSegmentHours;
         var groups = new List<SessionGroup>();
 
         if (A.Settings.ChartMergeAllSessions)
         {
-            var byCode = new Dictionary<string, SessionGroup>(StringComparer.OrdinalIgnoreCase);
+            var byKey = new Dictionary<string, SessionGroup>(StringComparer.Ordinal);
             foreach (var b in dayBlocks)
             {
-                if (!byCode.TryGetValue(b.ProjectCode, out var g))
+                var resolved = A.Tracker.FindByBlock(b);
+                string key = GroupKey(resolved, b.ProjectCode);
+                if (!byKey.TryGetValue(key, out var g))
                 {
-                    g = new SessionGroup { ProjectCode = b.ProjectCode };
-                    byCode[b.ProjectCode] = g;
+                    g = new SessionGroup { Project = resolved, ProjectCode = b.ProjectCode };
+                    byKey[key] = g;
                     groups.Add(g);
                 }
                 g.Hours += HoursOf(b, liveBlock);
@@ -381,13 +657,15 @@ public partial class TimesheetWindow : Window
             SessionGroup? cur = null;
             foreach (var b in dayBlocks) // already sorted chronologically by the caller
             {
+                var resolved = A.Tracker.FindByBlock(b);
+                string key = GroupKey(resolved, b.ProjectCode);
                 string note = b.Notes ?? "";
                 bool continuesRun = cur is not null
-                    && string.Equals(cur.ProjectCode, b.ProjectCode, StringComparison.OrdinalIgnoreCase)
+                    && GroupKey(cur.Project, cur.ProjectCode) == key
                     && string.Equals(cur.Note, note, StringComparison.Ordinal);
                 if (!continuesRun)
                 {
-                    cur = new SessionGroup { ProjectCode = b.ProjectCode, Note = note };
+                    cur = new SessionGroup { Project = resolved, ProjectCode = b.ProjectCode, Note = note };
                     groups.Add(cur);
                 }
                 cur!.Hours += HoursOf(b, liveBlock);
@@ -404,7 +682,7 @@ public partial class TimesheetWindow : Window
         foreach (var g in groups)
         {
             if (g.Hours <= 0) continue;
-            var p = projects.FirstOrDefault(x => string.Equals(x.Code, g.ProjectCode, StringComparison.OrdinalIgnoreCase));
+            var p = g.Project;
             if (p is null) continue; // project since deleted from the list; historical data stays in the CSV
 
             if (g.Hours < minHours && !g.ContainsLive)
@@ -448,7 +726,6 @@ public partial class TimesheetWindow : Window
     private FrameworkElement BuildChart(Dictionary<DateTime, List<TimeBlock>> byDay, TimeBlock? liveBlock,
         double width, double height, DateTime today)
     {
-        var projects = A.Tracker.Projects;
         double rawMax = byDay.Values.Select(day => day.Sum(b => HoursOf(b, liveBlock))).DefaultIfEmpty(0).Max();
         var (axisMax, step) = ComputeAxisScale(rawMax);
 
@@ -484,6 +761,23 @@ public partial class TimesheetWindow : Window
             canvas.Children.Add(label);
         }
 
+        // A dedicated "8 hour day" marker, separate from the regular gridlines above — those
+        // land at even fractions of whatever the axis max happens to be, which only coincides
+        // with 8h when the axis is sitting right at its floor. Once a day pushes the axis taller
+        // than 8h, this is the only line still marking a full workday. Dashed and drawn on top of
+        // (but more subtly than) the solid gridlines so it reads as a deliberate target, not just
+        // another tick — skipped when it would exactly double up on the top gridline.
+        if (axisMax > AxisFloorHours)
+        {
+            double y8 = plotH - (AxisFloorHours / axisMax) * plotH;
+            canvas.Children.Add(new Line
+            {
+                X1 = yAxisW, X2 = width, Y1 = y8, Y2 = y8,
+                Stroke = dimBrush, StrokeThickness = 1, StrokeDashArray = new DoubleCollection { 3, 3 },
+                Opacity = 0.55, SnapsToDevicePixels = true,
+            });
+        }
+
         var days = byDay.Keys.OrderBy(d => d).ToList();
         double dayW = plotW / 7.0;
         double barW = Math.Max(20, dayW - 10); // fill most of the day column, Teams-style
@@ -513,7 +807,7 @@ public partial class TimesheetWindow : Window
             // "Other" entries use their latest constituent's activity) — so the most-recently-
             // touched one (including the live one, whose "activity" is always right now) ends
             // up on top.
-            var segments = BuildDaySegments(byDay[day], projects, otherFill: faintBrush,
+            var segments = BuildDaySegments(byDay[day], otherFill: faintBrush,
                 liveBlock: day == today ? liveBlock : null);
 
             double yCursor = plotH;
@@ -543,8 +837,7 @@ public partial class TimesheetWindow : Window
                     var liveBorder = new SolidColorBrush(Lighten(baseColor, 0.4));
                     seg.BorderBrush = liveBorder;
                     seg.BorderThickness = new Thickness(2);
-                    liveBorder.BeginAnimation(SolidColorBrush.OpacityProperty, new DoubleAnimation(0.55, 1.0, TimeSpan.FromMilliseconds(900))
-                    { EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut } });
+                    liveBorder.BeginAnimation(SolidColorBrush.OpacityProperty, BreathingAnimation(0.55, 1.0, TimeSpan.FromMilliseconds(900)));
                 }
 
                 var content = new Grid();
@@ -575,12 +868,10 @@ public partial class TimesheetWindow : Window
                         // A small pulsing dot next to the label — not a full-surface texture —
                         // is the "still recording" cue, matching how the rest of the app marks
                         // "live" (the REC badge, the switcher's LIVE row) with a small accent
-                        // glyph rather than dressing up the whole surface. One-shot rather than
-                        // looped: this window already rebuilds the live segment every second to
-                        // grow it, so a self-looping animation would restart out of sync anyway —
-                        // the redraw itself is what makes it "breathe".
-                        dot.BeginAnimation(OpacityProperty, new DoubleAnimation(1.0, 0.3, TimeSpan.FromMilliseconds(900))
-                        { EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut } });
+                        // glyph rather than dressing up the whole surface. Phase-locked (see
+                        // BreathingAnimation) rather than one-shot, since this window rebuilds
+                        // the live segment from scratch every second regardless.
+                        dot.BeginAnimation(OpacityProperty, BreathingAnimation(1.0, 0.3, TimeSpan.FromMilliseconds(900)));
                         titleRow.Children.Add(dot);
                         labels.Children.Add(titleRow);
                     }
@@ -641,6 +932,828 @@ public partial class TimesheetWindow : Window
         return canvas;
     }
 
+    // ==================== calendar (24h time-of-day) view ====================
+    // A second renderer, parallel to BuildChart above rather than a variant of it — the bar view
+    // stacks each day's blocks into per-project TOTALS; the calendar view places every block at
+    // its own actual time of day, unstacked, so a day's ChartMergeAllSessions/ChartMinSegmentHours
+    // display-only grouping (which exists purely to make a bar chart legible) doesn't apply here
+    // at all. It reuses BuildChart's yAxisW/xAxisH/dayW/barW geometry so the 7 day columns stay
+    // pixel-aligned between the two views — both for visual consistency and because that
+    // alignment is what a future block-morph transition between them would ride on.
+
+    /// <summary>Vertical pixels per hour of the 24h grid — a 30-minute block is 30px tall.
+    /// Mutable (not a const) — Ctrl+scroll zooms this in/out, see ChartArea_MouseWheel/ZoomCalendar.</summary>
+    private double CalendarPxPerHour = 60;
+    private const double MinCalendarPxPerHour = 24;
+    private const double MaxCalendarPxPerHour = 160;
+
+    private FrameworkElement BuildCalendar(Dictionary<DateTime, List<TimeBlock>> byDay, TimeBlock? liveBlock,
+        double width, double height, DateTime today)
+    {
+        const double yAxisW = 40;
+        const double xAxisH = 32; // matches BuildChart's day-label strip height
+        double plotW = Math.Max(80, width - yAxisW);
+        double gridHeight = 24 * CalendarPxPerHour;
+        // The day-header row is now a FIXED strip above the scrollable hour grid (see headerCanvas
+        // below), not part of the scrolling canvas — so the scrollable body only needs to fit the
+        // grid itself, and the ScrollViewer only gets what's left after that fixed strip.
+        double bodyHeight = Math.Max(40, height - xAxisH);
+
+        var canvas = new Canvas { Width = width, Height = gridHeight };
+
+        // While a live block is ticking, the WHOLE canvas rebuilds every second (see OnTick) to
+        // grow it — a fresh grip element appearing under an otherwise-STATIONARY cursor still
+        // fires a genuine MouseEnter (WPF re-synchronises hit-testing after every layout change,
+        // and this is a brand new element as far as it's concerned), animating in from scratch
+        // each time: a visible flicker in lock-step with the live pulse. Capturing the cursor's
+        // position against the OUTGOING canvas (still in the visual tree at this point — it's
+        // only swapped out once this method returns, via SlideIn/CrossFade) lets each block below
+        // know synchronously, before its grips even exist, whether it should render already-
+        // hovered — sidestepping any ordering question between this render's own Loaded and
+        // MouseEnter notifications entirely.
+        Point? mouseInOldCanvas = null;
+        // The previous render is now a Grid (fixed header strip + ScrollViewer), not a bare
+        // ScrollViewer — see the `root` Grid built at the bottom of this method. Searched by type
+        // rather than assumed at a fixed child index, since which row the header/scroll body land
+        // in (and so which index each is added at) is a display choice, not a structural constant.
+        if (_currentChart is Grid prevGrid)
+        {
+            foreach (var child in prevGrid.Children)
+            {
+                if (child is not ScrollViewer { Content: Canvas oldCanvas } || !oldCanvas.IsLoaded) continue;
+                // This is purely a cosmetic optimisation (avoiding a redundant fade-in) — if the
+                // visual is mid-teardown or otherwise not positioned yet, just skip it rather than
+                // risk a crash over it.
+                try { mouseInOldCanvas = Mouse.GetPosition(oldCanvas); } catch (InvalidOperationException) { }
+                break;
+            }
+        }
+
+        // Fixed day-of-week/date strip, pinned at the bottom of the view instead of living at the
+        // bottom of the SCROLLING hour grid (gridHeight is typically ~1000px+ — that meant
+        // scrolling all the way down just to see which column is which day). Populated per-day
+        // inside the main loop below, alongside everything else that needs that same per-day
+        // geometry.
+        var headerCanvas = new Canvas { Width = width, Height = xAxisH, Background = Brushes.Transparent };
+
+        var gridBrush = (Brush)FindResource("Border");
+        var faintBrush = (Brush)FindResource("TextFaint");
+        var dimBrush = (Brush)FindResource("TextDim");
+        var accentBrush = (Brush)FindResource("Accent");
+        var monoFont = (FontFamily)FindResource("MonoFont");
+
+        double dayW = plotW / 7.0;
+        double barW = Math.Max(20, dayW - 10); // same column math as BuildChart, for alignment
+
+        // Hour gridlines + labels, one per hour — there's room for all 24 (unlike the bar view's
+        // 4-5 fractional steps), which also makes each one land on a whole, readable hour.
+        for (int hour = 0; hour <= 24; hour++)
+        {
+            double y = hour * CalendarPxPerHour;
+            canvas.Children.Add(new Line
+            {
+                X1 = yAxisW, X2 = width, Y1 = y, Y2 = y,
+                Stroke = gridBrush, StrokeThickness = 1, SnapsToDevicePixels = true,
+                Opacity = hour % 6 == 0 ? 1.0 : 0.55, // the 6-hour marks (12/6/12/6) read a touch stronger
+            });
+            if (hour == 24) continue; // no trailing "12 AM" label past the last line
+            var label = new TextBlock
+            {
+                Text = new DateTime(1, 1, 1, hour, 0, 0).ToString("h tt"),
+                FontSize = 10.5, Foreground = faintBrush, FontFamily = monoFont,
+                Width = yAxisW - 8, TextAlignment = TextAlignment.Right,
+            };
+            Canvas.SetLeft(label, 0);
+            Canvas.SetTop(label, y + 3);
+            canvas.Children.Add(label);
+        }
+
+        // Tracks each rendered block's bounds so the double-click-to-add handler below can tell
+        // "blank space" apart from "on top of an existing block" — double-clicking a real block
+        // isn't the empty-space-add gesture (Phase 4 gives blocks their own drag interaction).
+        var blockRects = new List<Rect>();
+
+        // ==================== delete confirmation popup ====================
+        // A small floating card, positioned next to whichever block's "✕" was clicked — the same
+        // confirm-before-delete idea as DayBlocksWindow's inline row swap, but blocks here are
+        // small absolutely-positioned canvas elements rather than list rows with room to spare,
+        // so the confirmation is a separate overlay instead of replacing the block's own content.
+        // `openConfirm` is a plain local (not a field) — closing over it from BOTH the block loop
+        // below and CloseConfirm/ShowDeleteConfirm is enough, since a single method call always
+        // builds and owns exactly one canvas. _confirmingDelete (a field) is the piece that
+        // actually needs to survive between renders — see its remarks.
+        Border? openConfirm = null;
+
+        void CloseConfirm()
+        {
+            if (openConfirm is null) return;
+            canvas.Children.Remove(openConfirm);
+            openConfirm = null;
+            _confirmingDelete = false;
+        }
+
+        void ShowDeleteConfirm(TimeBlock target, double blockLeft, double blockTop, double blockWidth, double blockHeight)
+        {
+            CloseConfirm();
+            const double cardWidth = 172;
+
+            var stack = new StackPanel();
+            stack.Children.Add(new TextBlock
+            {
+                Text = "Delete this block?", FontSize = 12, FontWeight = FontWeights.Medium,
+                Foreground = (Brush)FindResource("Live"), Margin = new Thickness(0, 0, 0, 8),
+            });
+            var row = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+            var cancelBtn = new Button
+            {
+                Content = "Cancel", Style = (Style)FindResource("Btn"), FontSize = 11,
+                Padding = new Thickness(9, 4, 9, 4), Margin = new Thickness(0, 0, 6, 0),
+            };
+            var deleteBtn = new Button
+            {
+                Content = "Delete", Style = (Style)FindResource("BtnAccent"), FontSize = 11,
+                Padding = new Thickness(9, 4, 9, 4), Background = (Brush)FindResource("Live"),
+            };
+            row.Children.Add(cancelBtn);
+            row.Children.Add(deleteBtn);
+            stack.Children.Add(row);
+
+            var card = new Border
+            {
+                Width = cardWidth, Background = (Brush)FindResource("Surface2"), CornerRadius = new CornerRadius(8),
+                Padding = new Thickness(10, 8, 10, 8), Child = stack, Opacity = 0,
+                Effect = new System.Windows.Media.Effects.DropShadowEffect
+                { BlurRadius = 8, ShadowDepth = 1, Opacity = 0.3, Color = (Color)ColorConverter.ConvertFromString("#161C2A") },
+            };
+
+            double left = Clamp(blockLeft + blockWidth / 2 - cardWidth / 2, yAxisW + 2, Math.Max(yAxisW + 2, width - cardWidth - 2));
+            const double approxCardHeight = 64;
+            bool roomAbove = blockTop >= approxCardHeight + 6;
+            double top = roomAbove ? blockTop - approxCardHeight - 6 : blockTop + blockHeight + 6;
+            Canvas.SetLeft(card, left);
+            Canvas.SetTop(card, top);
+            Canvas.SetZIndex(card, 1000);
+            canvas.Children.Add(card);
+            card.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(120)));
+            openConfirm = card;
+            _confirmingDelete = true;
+
+            cancelBtn.Click += (_, e) => { e.Handled = true; CloseConfirm(); };
+            deleteBtn.Click += (_, e) =>
+            {
+                e.Handled = true;
+                A.Log.DeleteBlock(target);
+                CloseConfirm();
+                _cachedWeekStart = null;
+                RenderCurrentWeek(0);
+            };
+        }
+
+        var days = byDay.Keys.OrderBy(d => d).ToList();
+        for (int i = 0; i < days.Count; i++)
+        {
+            var day = days[i];
+            double colLeft = yAxisW + dayW * i;
+            double cx = colLeft + dayW / 2;
+
+            if (day == today)
+            {
+                var ac = ((SolidColorBrush)accentBrush).Color;
+                var hl = new Rectangle
+                {
+                    Width = dayW - 4, Height = gridHeight, RadiusX = 6, RadiusY = 6,
+                    Fill = new SolidColorBrush(Color.FromArgb(20, ac.R, ac.G, ac.B)),
+                };
+                Canvas.SetLeft(hl, colLeft + 2);
+                Canvas.SetTop(hl, 0);
+                canvas.Children.Add(hl);
+            }
+
+            // ALL of the day's rendered blocks (draggable or not — including the live block and
+            // any rare block that spans past midnight, see spansMidnight below), so neighbour/
+            // collision lookups always see the true immediate neighbour even when it happens to
+            // be one of those non-draggable ones. draggableDayBlockElements is the subset that
+            // actually gets a move handler (and, per HasGrips, resize grips too) wired up in the
+            // second pass further down.
+            var allDayBlockElements = new List<(TimeBlock Block, Border Element)>();
+            var draggableDayBlockElements = new List<(TimeBlock Block, Border Element, bool HasGrips)>();
+
+            foreach (var b in byDay[day])
+            {
+                bool isLive = ReferenceEquals(b, liveBlock);
+                // A block that runs past this day's midnight has its Border's height clamped
+                // (below) to the visible 24:00 boundary purely for display — if it were dragged,
+                // committing would treat that TRUNCATED height as the real one and silently chop
+                // off whatever ran past midnight. Simplest safe answer: such blocks (rare — one
+                // continuous session spanning midnight without a stop/switch) just aren't
+                // draggable; isLive's exclusion below covers the mirror case (starts before
+                // today, only possible for the synthetic live block).
+                bool spansMidnight = b.EndLocal.Date > day;
+                // Clamp to this column's own midnight-to-midnight span — a block that started
+                // before this day (only possible for the synthetic live block, force-bucketed
+                // under "today" even if it actually started yesterday) or that runs past this
+                // day's midnight renders truncated at the boundary rather than at a negative or
+                // wildly out-of-range offset.
+                double startH = b.StartLocal.Date < day ? 0.0 : b.StartLocal.TimeOfDay.TotalHours;
+                double endH = b.EndLocal.Date > day ? 24.0 : b.EndLocal.TimeOfDay.TotalHours;
+                double top = startH * CalendarPxPerHour;
+                double segH = Math.Max(3, (endH - startH) * CalendarPxPerHour);
+
+                var resolved = A.Tracker.FindByBlock(b);
+                var baseColor = resolved is not null ? ColorUtil.Parse(resolved.Color) : ((SolidColorBrush)faintBrush).Color;
+                var fill = new SolidColorBrush(baseColor);
+
+                string tooltip = resolved is not null
+                    ? $"{resolved.Code} · ASN {resolved.Asn} · {b.StartLocal:HH:mm}–{b.EndLocal:HH:mm}" + (isLive ? " · recording now" : "")
+                    : $"{b.ProjectCode} · {b.StartLocal:HH:mm}–{b.EndLocal:HH:mm}";
+                if (!string.IsNullOrWhiteSpace(b.Notes)) tooltip += $"\nNote: {b.Notes}";
+
+                var block = new Border
+                {
+                    Width = barW, Height = segH, Background = fill,
+                    CornerRadius = new CornerRadius(4), ToolTip = tooltip, ClipToBounds = true,
+                };
+
+                if (isLive)
+                {
+                    var liveBorder = new SolidColorBrush(Lighten(baseColor, 0.4));
+                    block.BorderBrush = liveBorder;
+                    block.BorderThickness = new Thickness(2);
+                    liveBorder.BeginAnimation(SolidColorBrush.OpacityProperty, BreathingAnimation(0.55, 1.0, TimeSpan.FromMilliseconds(900)));
+                }
+
+                // The block's content is always a Grid (even when there's nothing to label) so
+                // the drag-handle grips below can be added as overlay children regardless of
+                // whether there's room for text — a 5-minute sliver is still draggable, just
+                // unlabelled.
+                var content = new Grid();
+                if (segH >= 16 && resolved is not null)
+                {
+                    var ink = new SolidColorBrush(SystemAccent.ReadableInk(baseColor));
+                    var labels = new StackPanel { VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(5, 3, 5, 2) };
+                    labels.Children.Add(new TextBlock
+                    {
+                        Text = isLive ? resolved.Code + "  ●" : resolved.Code, FontSize = 10.5,
+                        FontWeight = FontWeights.SemiBold, Foreground = ink, TextTrimming = TextTrimming.CharacterEllipsis,
+                    });
+                    if (segH >= 34)
+                    {
+                        labels.Children.Add(new TextBlock
+                        {
+                            Text = $"{b.StartLocal:HH:mm}–{b.EndLocal:HH:mm}", FontSize = 9, Foreground = ink, Opacity = 0.85,
+                            TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 1, 0, 0),
+                        });
+                    }
+                    content.Children.Add(labels);
+                }
+
+                // A fixed grip/✕ size would swallow most or all of a short block's clickable
+                // area (an 8-18px affordance on a 15-20px/15-20min block leaves no room to grab
+                // the body for a move, or even fit, at all) — both disappear entirely below this
+                // height, leaving the whole block movable (but not resizable/deletable from the
+                // block itself) instead of forcing an accidental resize or an overflowing ✕. Such
+                // a block is still reachable via click-to-edit below (unconditional on height) —
+                // its dialog has its own Delete link, and typed Start/End covers resize.
+                const double MinHeightForGrips = 16;
+
+                // Small "✕" delete affordance, top-right corner, hidden until the block is
+                // hovered — same fade treatment as the drag grips below. Not offered on the live
+                // block: it isn't a recorded row yet, so there's nothing to delete (stop/switch
+                // it from the main window instead).
+                Border? deleteBtn = null;
+                if (!isLive && segH >= MinHeightForGrips)
+                {
+                    // Transparent hit-area (a bit bigger than the glyph itself, for an easier
+                    // click target) with no visible fill — just the faint ✕ on top, no chip/circle
+                    // behind it. A subtle drop shadow keeps it legible over light block colours
+                    // without needing an opaque backing.
+                    deleteBtn = new Border
+                    {
+                        Width = 18, Height = 18, Background = Brushes.Transparent,
+                        HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top,
+                        Margin = new Thickness(0, 2, 2, 0), Cursor = Cursors.Hand, Opacity = 0,
+                        Child = new TextBlock
+                        {
+                            Text = "✕", FontSize = 9.5, FontWeight = FontWeights.Bold, Foreground = Brushes.White,
+                            HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+                            Effect = new System.Windows.Media.Effects.DropShadowEffect
+                            { BlurRadius = 3, ShadowDepth = 0, Opacity = 0.7, Color = Colors.Black },
+                        },
+                    };
+                    content.Children.Add(deleteBtn);
+                }
+
+                bool draggable = !isLive && !spansMidnight;
+                bool showGrips = draggable && segH >= MinHeightForGrips;
+                Border? topGrip = null, botGrip = null;
+                if (draggable) block.Cursor = Cursors.SizeAll;
+
+                // See mouseInOldCanvas above — if the cursor's already resting where this block
+                // is about to land, show its hover affordances (grips, delete ✕) immediately (no
+                // fade) instead of starting hidden and animating in, which is what produced the
+                // once-a-second flicker while a live block ticks.
+                var blockRect = new Rect(cx - barW / 2, top, barW, segH);
+                bool alreadyHovered = mouseInOldCanvas is { } mp && blockRect.Contains(mp);
+
+                if (showGrips)
+                {
+                    double gripH = Math.Clamp(segH * 0.25, 4, 8);
+                    topGrip = BuildDragGrip(top: true, gripH);
+                    botGrip = BuildDragGrip(top: false, gripH);
+                    content.Children.Add(topGrip);
+                    content.Children.Add(botGrip);
+                    if (alreadyHovered)
+                    {
+                        ((Border)topGrip.Child).Opacity = 0.85;
+                        ((Border)botGrip.Child).Opacity = 0.85;
+                    }
+                }
+                if (deleteBtn is not null && alreadyHovered) deleteBtn.Opacity = 0.8;
+
+                block.Child = content;
+
+                Canvas.SetLeft(block, cx - barW / 2);
+                Canvas.SetTop(block, top);
+                canvas.Children.Add(block);
+                allDayBlockElements.Add((b, block));
+                if (draggable) draggableDayBlockElements.Add((b, block, showGrips));
+
+                if (topGrip is not null && botGrip is not null)
+                    WireGripHoverFade(block, topGrip, botGrip);
+                if (deleteBtn is not null)
+                {
+                    WireDeleteHoverFade(block, deleteBtn);
+                    var capturedTarget = b;
+                    double delLeft = cx - barW / 2, delTop = top, delW = barW, delH = segH;
+                    deleteBtn.MouseLeftButtonDown += (_, e) =>
+                    {
+                        e.Handled = true; // don't let this reach the block's own MouseLeftButtonDown (BeginMove)
+                        ShowDeleteConfirm(capturedTarget, delLeft, delTop, delW, delH);
+                    };
+                }
+                blockRects.Add(blockRect);
+            }
+
+            // Second pass: wire up move/resize now that every block for the day has a Border,
+            // so a resize's neighbour-push can look up an already-built element to mutate. Sorted
+            // once here and handed to every Begin* call for the day, rather than each closure
+            // re-sorting its own copy.
+            var sortedAllDayBlocks = allDayBlockElements.OrderBy(x => x.Block.StartLocal).ToList();
+            foreach (var (b, element, hasGrips) in draggableDayBlockElements)
+            {
+                var capturedDay = day;
+                var capturedBlock = b;
+                var capturedElement = element;
+
+                if (hasGrips)
+                {
+                    var grid = (Grid)element.Child;
+                    // Children order from above: [labels?], topGrip, botGrip — grips are always
+                    // the last two when present (hasGrips is exactly the condition that added them).
+                    var botGrip = (Border)grid.Children[grid.Children.Count - 1];
+                    var topGrip = (Border)grid.Children[grid.Children.Count - 2];
+                    topGrip.MouseLeftButtonDown += (_, e) => BeginResize(e, topGrip, top: true, capturedBlock, capturedElement, capturedDay, sortedAllDayBlocks);
+                    botGrip.MouseLeftButtonDown += (_, e) => BeginResize(e, botGrip, top: false, capturedBlock, capturedElement, capturedDay, sortedAllDayBlocks);
+                }
+                element.MouseLeftButtonDown += (_, e) => BeginMove(e, capturedElement, capturedBlock, capturedDay);
+            }
+
+            var labelStack = new StackPanel
+            {
+                Width = dayW, Cursor = System.Windows.Input.Cursors.Hand,
+                Background = Brushes.Transparent,
+                ToolTip = "View this day's blocks",
+            };
+            labelStack.Children.Add(new TextBlock
+            {
+                Text = day.ToString("ddd"), FontSize = 11.5, TextAlignment = TextAlignment.Center,
+                FontWeight = day == today ? FontWeights.Bold : FontWeights.Medium,
+                Foreground = day == today ? accentBrush : dimBrush,
+            });
+            labelStack.Children.Add(new TextBlock
+            {
+                Text = day.ToString("%d"), FontSize = 9.5, TextAlignment = TextAlignment.Center, Foreground = faintBrush,
+            });
+            var dayForClick = day;
+            labelStack.MouseLeftButtonUp += (_, _) => OpenDayDetail(dayForClick);
+            Canvas.SetLeft(labelStack, colLeft);
+            Canvas.SetTop(labelStack, 4);
+            headerCanvas.Children.Add(labelStack);
+        }
+
+        // ==================== drag interaction (edge-resize / whole-block move) ====================
+        // Tiny handles fade in on hover; a captured drag mutates Canvas.Top/Height directly on the
+        // affected Border(s) for smooth 1:1 tracking with live snapping (no rebuild mid-drag — see
+        // the _drag guards on OnTick/OnStateChanged/ChartCard_SizeChanged/Navigate), and persists
+        // via CsvLog.UpdateBlock once, on release. Local functions (not instance methods) so they
+        // can close over this render's canvas/geometry directly.
+
+        const double MinBlockPx = 8; // an edge/neighbour can never be pushed/shrunk below this
+
+        Border BuildDragGrip(bool top, double height) => new()
+        {
+            Height = height, Background = Brushes.Transparent, Cursor = Cursors.SizeNS,
+            VerticalAlignment = top ? VerticalAlignment.Top : VerticalAlignment.Bottom,
+            Child = new Border
+            {
+                Width = 22, Height = Math.Min(3, height), CornerRadius = new CornerRadius(1.5),
+                Background = Brushes.White, Opacity = 0, IsHitTestVisible = false,
+                HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+            },
+        };
+
+        void WireGripHoverFade(Border block, Border topGrip, Border botGrip)
+        {
+            void Fade(Border grip, double to) =>
+                ((Border)grip.Child).BeginAnimation(OpacityProperty, new DoubleAnimation(to, TimeSpan.FromMilliseconds(140))
+                { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
+            block.MouseEnter += (_, _) => { Fade(topGrip, 0.85); Fade(botGrip, 0.85); };
+            // Guarded: mid-drag the cursor can end up outside the (now resized) block's bounds —
+            // the handle being actively dragged shouldn't disappear out from under the mouse.
+            block.MouseLeave += (_, _) => { if (_drag is null) { Fade(topGrip, 0); Fade(botGrip, 0); } };
+        }
+
+        void WireDeleteHoverFade(Border block, Border delBtn)
+        {
+            void Fade(double to) => delBtn.BeginAnimation(OpacityProperty, new DoubleAnimation(to, TimeSpan.FromMilliseconds(140))
+            { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
+            block.MouseEnter += (_, _) => Fade(0.8);
+            // Stays visible while its own confirm popup is open, same reasoning as the grips' guard.
+            block.MouseLeave += (_, _) => { if (_drag is null && !_confirmingDelete) Fade(0); };
+        }
+
+        double YToMinutes(double y) => y / CalendarPxPerHour * 60.0;
+        double MinutesToY(double minutes) => minutes / 60.0 * CalendarPxPerHour;
+        double SnapTo(double rawMinutes, int step) => Math.Round(rawMinutes / step) * (double)step;
+
+        // Final safety net, checked once at commit time against EVERY other block that day (not
+        // just the one immediate neighbour the live clamp bounds were computed from) — belt and
+        // suspenders on top of the live clamping, so an overlapping row can never actually be
+        // written even if some edge case in that clamp math is wrong. `except`/`alsoExcept` let
+        // the dragged block and (for a resize) its pushed neighbour skip checking against
+        // themselves/each other, since both their positions are simultaneously changing.
+        bool OverlapsAnyOtherBlock(DateTime day, TimeBlock self, DateTime newStart, DateTime newEnd, TimeBlock? alsoExcept)
+        {
+            if (!byDay.TryGetValue(day, out var blocks)) return false;
+            foreach (var other in blocks)
+            {
+                if (ReferenceEquals(other, self) || ReferenceEquals(other, alsoExcept)) continue;
+                if (newStart < other.EndLocal && newEnd > other.StartLocal) return true;
+            }
+            return false;
+        }
+
+        // Same eligibility rule as "draggable" above (isLive / spansMidnight), reusable for a
+        // NEIGHBOUR found via the full (not draggable-only) block list — a non-draggable
+        // neighbour is a hard stop rather than something to push along.
+        bool IsDraggableBlock(TimeBlock nb, DateTime day) => !ReferenceEquals(nb, liveBlock) && nb.EndLocal.Date <= day;
+
+        void BeginResize(MouseButtonEventArgs e, Border grip, bool top, TimeBlock block, Border element,
+            DateTime day, List<(TimeBlock Block, Border Element)> dayBlocks)
+        {
+            if (_drag is not null) return;
+            CloseConfirm();
+            e.Handled = true;
+            canvas.CaptureMouse();
+
+            double origTop = Canvas.GetTop(element);
+            double origHeight = element.Height;
+            int idx = dayBlocks.FindIndex(x => ReferenceEquals(x.Element, element));
+            var neighborPair = top
+                ? (idx > 0 ? dayBlocks[idx - 1] : ((TimeBlock, Border)?)null)
+                : (idx >= 0 && idx < dayBlocks.Count - 1 ? dayBlocks[idx + 1] : ((TimeBlock, Border)?)null);
+            // A non-draggable neighbour (the live block, or the rare block spanning past
+            // midnight) is never pushed — it's a hard stop instead. dayBlocks here is the FULL
+            // per-day list (not just the draggable subset), specifically so this lookup still
+            // finds — and correctly stops at — one of those, rather than skipping past it to
+            // whatever draggable block happens to be next and allowing an invisible overlap.
+            bool neighborIsHardStop = neighborPair is not null && !IsDraggableBlock(neighborPair.Value.Item1, day);
+
+            double low, high, neighborOrigTop = 0, neighborOrigHeight = 0;
+            if (top)
+            {
+                high = origTop + origHeight - MinBlockPx;
+                if (neighborPair is { } np)
+                {
+                    neighborOrigTop = Canvas.GetTop(np.Item2);
+                    neighborOrigHeight = np.Item2.Height;
+                    low = neighborIsHardStop ? neighborOrigTop + neighborOrigHeight : neighborOrigTop + MinBlockPx;
+                }
+                else low = 0;
+            }
+            else
+            {
+                low = origTop + MinBlockPx;
+                if (neighborPair is { } np)
+                {
+                    neighborOrigTop = Canvas.GetTop(np.Item2);
+                    neighborOrigHeight = np.Item2.Height;
+                    high = neighborIsHardStop ? neighborOrigTop : neighborOrigTop + neighborOrigHeight - MinBlockPx;
+                }
+                else high = gridHeight;
+            }
+            if (low > high) low = high; // degenerate — neighbour's already at its own minimum; pin rather than invert
+
+            _drag = new DragState
+            {
+                IsResize = true, ResizeTop = top, Block = block, Element = element, Day = day, CurrentDay = day,
+                StartMouseY = e.GetPosition(canvas).Y, OrigTop = origTop, OrigHeight = origHeight,
+                LowBound = low, HighBound = high,
+                Neighbor = neighborIsHardStop ? null : neighborPair?.Item1,
+                NeighborElement = neighborIsHardStop ? null : neighborPair?.Item2,
+                NeighborOrigTop = neighborOrigTop, NeighborOrigHeight = neighborOrigHeight,
+            };
+        }
+
+        void BeginMove(MouseButtonEventArgs e, Border element, TimeBlock block, DateTime day)
+        {
+            if (_drag is not null) return;
+            CloseConfirm();
+            e.Handled = true;
+            canvas.CaptureMouse();
+
+            double origTop = Canvas.GetTop(element);
+            double origHeight = element.Height;
+
+            // No longer clamped between the immediate previous/next block that day — a whole-
+            // block move can now be dragged past its neighbours into any open gap further up or
+            // down (or, per CurrentDay below, onto a different day entirely). The only remaining
+            // bound is the day's own 0..24h span; whether the FINAL drop position actually lands
+            // somewhere free is checked once at MouseUp (OverlapsAnyOtherBlock), same safety net
+            // a resize already relies on — nothing is written to disk if it doesn't clear that.
+            double low = 0;
+            double high = gridHeight - origHeight;
+            if (low > high) low = high;
+
+            _drag = new DragState
+            {
+                IsResize = false, ResizeTop = false, Block = block, Element = element, Day = day, CurrentDay = day,
+                StartMouseY = e.GetPosition(canvas).Y, OrigTop = origTop, OrigHeight = origHeight,
+                LowBound = low, HighBound = high,
+                StartMouseX = e.GetPosition(canvas).X, OrigLeft = Canvas.GetLeft(element),
+            };
+        }
+
+        canvas.MouseMove += (_, e) =>
+        {
+            if (_drag is not { } d) return;
+            double deltaY = e.GetPosition(canvas).Y - d.StartMouseY;
+
+            if (d.IsResize)
+            {
+                int snap = Math.Max(1, A.Settings.EdgeSnapMinutes);
+                if (d.ResizeTop)
+                {
+                    double newTop = Clamp(MinutesToY(SnapTo(YToMinutes(d.OrigTop + deltaY), snap)), d.LowBound, d.HighBound);
+                    Canvas.SetTop(d.Element, newTop);
+                    d.Element.Height = Math.Max(MinBlockPx, d.OrigTop + d.OrigHeight - newTop);
+                    if (d.NeighborElement is not null)
+                    {
+                        double neighborOrigBottom = d.NeighborOrigTop + d.NeighborOrigHeight;
+                        // Only shrink the neighbour (its bottom edge tracking ours) once we've
+                        // actually encroached past its original bottom edge — dragging AWAY
+                        // (growing the gap between us) restores it to its untouched original
+                        // height instead of dragging it along for the ride.
+                        d.NeighborElement.Height = newTop < neighborOrigBottom
+                            ? Math.Max(MinBlockPx, newTop - d.NeighborOrigTop)
+                            : d.NeighborOrigHeight;
+                    }
+                }
+                else
+                {
+                    double newBottom = Clamp(MinutesToY(SnapTo(YToMinutes(d.OrigTop + d.OrigHeight + deltaY), snap)), d.LowBound, d.HighBound);
+                    d.Element.Height = Math.Max(MinBlockPx, newBottom - d.OrigTop);
+                    if (d.NeighborElement is not null)
+                    {
+                        if (newBottom > d.NeighborOrigTop)
+                        {
+                            Canvas.SetTop(d.NeighborElement, newBottom);
+                            d.NeighborElement.Height = Math.Max(MinBlockPx, d.NeighborOrigTop + d.NeighborOrigHeight - newBottom);
+                        }
+                        else
+                        {
+                            // Not encroaching (any more) — put it back exactly as it was rather
+                            // than leaving it wherever the last encroaching frame left it.
+                            Canvas.SetTop(d.NeighborElement, d.NeighborOrigTop);
+                            d.NeighborElement.Height = d.NeighborOrigHeight;
+                        }
+                    }
+                }
+            }
+            else
+            {
+                int snap = Math.Max(1, A.Settings.MoveSnapMinutes);
+                double newTop = Clamp(MinutesToY(SnapTo(YToMinutes(d.OrigTop + deltaY), snap)), d.LowBound, d.HighBound);
+                Canvas.SetTop(d.Element, newTop);
+
+                // Cross-day: snap horizontally to whichever day column the cursor is currently
+                // over (blocks always sit centred in their column, so there's no fractional-X to
+                // preserve — same all-or-nothing snap the double-click-to-add handler uses).
+                double mouseX = e.GetPosition(canvas).X;
+                int dayIndex = Math.Clamp((int)((mouseX - yAxisW) / dayW), 0, days.Count - 1);
+                var targetDay = days[dayIndex];
+                double targetCx = yAxisW + dayW * dayIndex + dayW / 2;
+                Canvas.SetLeft(d.Element, targetCx - barW / 2);
+                d.CurrentDay = targetDay;
+            }
+        };
+
+        canvas.MouseLeftButtonUp += (_, e) =>
+        {
+            if (_drag is not { } d) { canvas.ReleaseMouseCapture(); return; }
+            canvas.ReleaseMouseCapture();
+
+            // A whole-block "move" with (near-)zero actual movement is a click, not a drag — open
+            // the edit dialog instead of writing back the (unchanged) position. A resize grip is
+            // small and single-purpose enough that it doesn't get this treatment.
+            const double ClickThresholdPx = 3;
+            var upPos = e.GetPosition(canvas);
+            if (!d.IsResize && Math.Abs(upPos.Y - d.StartMouseY) < ClickThresholdPx && Math.Abs(upPos.X - d.StartMouseX) < ClickThresholdPx)
+            {
+                _drag = null;
+                bool changed = AddTimeDialog.AskEdit(this, d.Block);
+                if (changed) _cachedWeekStart = null;
+                RenderCurrentWeek(0); // also restores the element's position from any sub-threshold jitter
+                return;
+            }
+
+            double finalTop = Canvas.GetTop(d.Element);
+            double finalHeight = d.Element.Height;
+            // CurrentDay for a resize is always just Day (MouseMove never touches it in that
+            // branch) — this only actually differs from Day for a move that's crossed columns.
+            var newStart = d.CurrentDay + TimeSpan.FromMinutes(YToMinutes(finalTop));
+            var newEnd = d.CurrentDay + TimeSpan.FromMinutes(YToMinutes(finalTop + finalHeight));
+
+            DateTime? neighborNewStart = null, neighborNewEnd = null;
+            bool neighborChanged = false;
+            if (d.NeighborElement is not null)
+            {
+                double nTop = Canvas.GetTop(d.NeighborElement);
+                double nHeight = d.NeighborElement.Height;
+                // Exact equality is fine here (not a fragile float comparison) — the "not
+                // encroaching" branch above assigns these back from NeighborOrigTop/Height
+                // verbatim, not via any recomputation that could round differently.
+                neighborChanged = nTop != d.NeighborOrigTop || nHeight != d.NeighborOrigHeight;
+                neighborNewStart = d.Day + TimeSpan.FromMinutes(YToMinutes(nTop));
+                neighborNewEnd = d.Day + TimeSpan.FromMinutes(YToMinutes(nTop + nHeight));
+            }
+
+            // A cross-MONTH move isn't supported — CsvLog.UpdateBlock rewrites the row in place in
+            // the file its ORIGINAL date belongs to, so a new date has to stay within that same
+            // file/month (see its remarks). Within the same month, a cross-DAY move is just a
+            // normal rewrite with a different date, no different from changing its time-of-day.
+            bool crossMonth = d.CurrentDay.Year != d.Day.Year || d.CurrentDay.Month != d.Day.Month;
+
+            bool ok = !crossMonth
+                && !OverlapsAnyOtherBlock(d.CurrentDay, d.Block, newStart, newEnd, d.Neighbor)
+                && (!neighborChanged || !OverlapsAnyOtherBlock(d.Day, d.Neighbor!, neighborNewStart!.Value, neighborNewEnd!.Value, d.Block));
+
+            if (ok)
+            {
+                var updated = new TimeBlock { StartLocal = newStart, EndLocal = newEnd, Notes = d.Block.Notes };
+                A.Log.UpdateBlock(d.Block, updated);
+
+                // Only touch the neighbour's row if it was actually pushed — never encroaching
+                // on it (e.g. dragging away the whole time) means its row is already correct as
+                // recorded, so there's nothing to rewrite.
+                if (neighborChanged && d.Neighbor is not null)
+                {
+                    var nUpdated = new TimeBlock { StartLocal = neighborNewStart!.Value, EndLocal = neighborNewEnd!.Value, Notes = d.Neighbor.Notes };
+                    A.Log.UpdateBlock(d.Neighbor, nUpdated);
+                }
+            }
+            // If not ok, nothing is written — the re-render below reverts to the last-saved
+            // (necessarily valid) state instead of risking an overlapping row on disk.
+
+            _drag = null;
+            _cachedWeekStart = null;
+            RenderCurrentWeek(0); // one authoritative re-render, reconciling with what's now on disk
+        };
+
+        // Double-click on blank grid space (not the axis strip, the day-label row, or on top of
+        // an existing block) opens AddTimeDialog pre-filled to that day/time — see AskAtTime.
+        canvas.Background = Brushes.Transparent; // otherwise empty space isn't hit-test visible at all
+        canvas.MouseLeftButtonDown += (_, e) =>
+        {
+            // Clicking blank canvas space dismisses an open delete confirmation — a click that
+            // instead landed on a block/grip/✕/button already had e.Handled set true upstream
+            // and never reaches this bubbled handler at all.
+            if (openConfirm is not null) CloseConfirm();
+
+            if (e.ClickCount != 2) return;
+            var pos = e.GetPosition(canvas);
+            if (pos.X < yAxisW) return; // hour-label axis strip
+            if (blockRects.Any(r => r.Contains(pos))) return; // on an existing block, not blank space
+
+            int dayIndex = (int)((pos.X - yAxisW) / dayW);
+            if (dayIndex < 0 || dayIndex >= days.Count) return;
+            var clickedDay = days[dayIndex];
+
+            double clickedMinutes = pos.Y / CalendarPxPerHour * 60;
+            double snappedMinutes = Clamp(Math.Round(clickedMinutes / 30.0) * 30.0, 0, 24 * 60 - 30);
+            var start = TimeSpan.FromMinutes(snappedMinutes);
+
+            // Capped at the max manual duration, or the next committed block that day, whichever
+            // comes first — AddTimeDialog re-validates against live blocks/overlaps regardless,
+            // this is just a sensible starting fill.
+            var nextStart = byDay.TryGetValue(clickedDay, out var dayBlocks)
+                ? dayBlocks.Where(b => b.StartLocal.Date == clickedDay && b.StartLocal.TimeOfDay > start)
+                    .Select(b => b.StartLocal.TimeOfDay).DefaultIfEmpty(TimeSpan.FromHours(24)).Min()
+                : TimeSpan.FromHours(24);
+            var maxEnd = start + TimeSpan.FromMinutes(Math.Max(1, A.Settings.ManualBlockMaxMinutes));
+            var end = maxEnd < nextStart ? maxEnd : nextStart;
+
+            e.Handled = true;
+            bool added = AddTimeDialog.AskAtTime(this, clickedDay, start, end);
+            if (added) { _cachedWeekStart = null; RenderCurrentWeek(0); }
+        };
+
+        var scroll = new ScrollViewer
+        {
+            Width = width, Height = bodyHeight, Content = canvas,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+        };
+        // Ctrl+scroll zooms the hour scale instead of panning — Preview (tunnelling) so this runs,
+        // and can mark the event handled, before the ScrollViewer's own bubbling MouseWheel
+        // handler would otherwise just scroll it vertically regardless of the modifier key. Shift
+        // (week navigation) and plain scroll (hour grid) don't need anything here: Shift is
+        // intercepted higher up, at the whole chart area (see ChartArea_PreviewMouseWheel), before
+        // tunnelling even reaches this ScrollViewer; plain scroll falls through to this
+        // ScrollViewer's own default vertical-scroll handling untouched. Hovering the pinned date
+        // header (outside this ScrollViewer entirely) and scrolling there, or hovering the
+        // week-range label in the window's own title bar, both reach ChartArea_MouseWheel by
+        // ordinary bubbling — no extra wiring needed for either.
+        scroll.PreviewMouseWheel += (_, e) =>
+        {
+            if ((Keyboard.Modifiers & ModifierKeys.Control) == 0) return;
+            e.Handled = true;
+            ZoomCalendar(e.Delta > 0 ? 1 : -1, bodyHeight);
+        };
+        // Remember the offset as the user scrolls, so the once-a-second rebuild (OnTick, growing
+        // the live block) can restore it below instead of yanking them back to the default spot.
+        // Tracking is deliberately NOT wired until after Loaded applies the initial position —
+        // ScrollViewer fires ScrollChanged of its own accord while still settling its initial
+        // layout (with VerticalOffset 0, before anything's actually been scrolled), and wiring
+        // this up early let that transient 0 stomp the remembered offset on every single
+        // once-a-second rebuild, which is what was pulling the view back to the top continuously
+        // instead of just on the initial open.
+        scroll.Loaded += (_, _) =>
+        {
+            double target = _calendarScrollOffset
+                ?? Clamp(12 * CalendarPxPerHour - bodyHeight / 2, 0, Math.Max(0, gridHeight - bodyHeight));
+            scroll.ScrollToVerticalOffset(target);
+            _calendarScrollOffset = target;
+            scroll.ScrollChanged += (_, e) => _calendarScrollOffset = e.VerticalOffset;
+        };
+
+        // Scrollable body (Row 0) above the fixed date header (Row 1), pinned at the bottom of
+        // the view.
+        var root = new Grid { Width = width, Height = height };
+        root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(xAxisH) });
+        Grid.SetRow(scroll, 0);
+        Grid.SetRow(headerCanvas, 1);
+        root.Children.Add(headerCanvas);
+        root.Children.Add(scroll);
+        return root;
+    }
+
+    /// <summary>
+    /// Cross-fades the new view in over the old one, in place — used for the bar/calendar view
+    /// toggle, as opposed to SlideIn's horizontal week-to-week slide.
+    ///
+    /// A true block-level "morph" (each block sliding/resizing from its bar position into its
+    /// calendar time-slot, riding on the fact that a day's blocks are already chronological) was
+    /// considered instead of a cross-fade, and is architecturally sound but not quite a drop-in:
+    /// BuildChart's default grouping (Settings.ChartMergeAllSessions) collapses a whole day's
+    /// sessions for a project into ONE bar segment even when there's a real gap between them
+    /// (worked 9-10am, then again 2-3pm) — so a segment doesn't always have a single contiguous
+    /// rectangle to morph into; morphing its bounding box would paint over the untracked gap as
+    /// if it were worked time, which is actively misleading, not just visually rough. The correct
+    /// fix is for the bar view's departure frame specifically to render one sub-element per raw
+    /// block, stacked with zero gap within a merged group (pixel-identical to today's look, since
+    /// same-project blocks touching with no gap are indistinguishable from one solid bar) so each
+    /// has its own well-defined start/end to animate toward. That's a real, scoped follow-up
+    /// rather than something to bolt on blind — a cross-fade is the documented, safe stand-in.
+    /// </summary>
+    private void CrossFade(FrameworkElement newVisual)
+    {
+        var old = _currentChart;
+        _currentChart = newVisual;
+
+        newVisual.Opacity = 0;
+        ChartHost.Children.Add(newVisual);
+        newVisual.BeginAnimation(OpacityProperty,
+            new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(260)) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
+
+        if (old is null) return;
+        var fadeOut = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(200))
+        { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseIn } };
+        fadeOut.Completed += (_, _) => ChartHost.Children.Remove(old);
+        old.BeginAnimation(OpacityProperty, fadeOut);
+    }
+
     /// <summary>Add the new week's chart, sliding it in while the previous one slides out and fades.</summary>
     private void SlideIn(FrameworkElement newVisual, int direction)
     {
@@ -680,11 +1793,15 @@ public partial class TimesheetWindow : Window
     private void RebuildLegend(Dictionary<DateTime, List<TimeBlock>> byDay)
     {
         Legend.Children.Clear();
-        var active = new HashSet<string>(byDay.Values.SelectMany(d => d.Select(b => b.ProjectCode)), StringComparer.OrdinalIgnoreCase);
+        // Resolved by Id (not raw ProjectCode) so a project renamed mid-week still shows up for
+        // days it was tracked under its old code — see TrackerService.FindByBlock.
+        var activeIds = new HashSet<string>(
+            byDay.Values.SelectMany(d => d.Select(b => A.Tracker.FindByBlock(b)?.Id)).OfType<string>(),
+            StringComparer.Ordinal);
 
         foreach (var p in A.Tracker.Projects)
         {
-            if (!active.Contains(p.Code)) continue;
+            if (!activeIds.Contains(p.Id)) continue;
             var item = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 18, 4) };
             item.Children.Add(new Ellipse
             {

@@ -75,4 +75,31 @@ public sealed class Settings
     /// recorded data or the IFS export, only how the chart draws it.
     /// </summary>
     public bool ChartMergeAllSessions { get; set; } = true;
+
+    /// <summary>Which timesheet view opens by default: "Bar" (hours totalled) or "Calendar"
+    /// (24h time-of-day breakdown). The in-window toggle can still switch either way each time —
+    /// this only decides what a fresh open starts on.</summary>
+    public string DefaultTimesheetView { get; set; } = "Bar";
+
+    /// <summary>
+    /// Calendar-view drag-to-resize: dragging a block's top/bottom edge snaps to the nearest
+    /// this-many minutes. Purely an editing aid — has no effect on the bar view or anything
+    /// already recorded.
+    /// </summary>
+    public int EdgeSnapMinutes { get; set; } = 10;
+
+    /// <summary>
+    /// Calendar-view drag-to-move: dragging a whole block snaps its start time to the nearest
+    /// this-many minutes (duration is preserved). Finer than <see cref="EdgeSnapMinutes"/> by
+    /// default since repositioning a whole block is a smaller, more precise adjustment than
+    /// stretching one edge of it.
+    /// </summary>
+    public int MoveSnapMinutes { get; set; } = 5;
+
+    /// <summary>
+    /// Manual "add time by amount" defaults to this many minutes, and it's also the cap on how
+    /// far a calendar double-click-to-add reaches past the clicked time (never past the start of
+    /// the next existing block that day).
+    /// </summary>
+    public int ManualBlockMaxMinutes { get; set; } = 30;
 }

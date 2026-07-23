@@ -22,7 +22,18 @@ public sealed class JsonStore
         {
             var json = File.ReadAllText(_paths.ProjectsFile);
             var list = JsonSerializer.Deserialize<List<Project>>(json, Opts) ?? new();
-            return list.OrderBy(p => p.Order).ToList();
+
+            // Back-fill a stable id into any project saved before Project.Id existed — a
+            // zero-config, one-time migration (same tolerant-load pattern as everything else in
+            // this file): missing fields just get sensible defaults, no version check needed.
+            bool needsSave = false;
+            foreach (var p in list)
+            {
+                if (string.IsNullOrEmpty(p.Id)) { p.Id = Guid.NewGuid().ToString("N"); needsSave = true; }
+            }
+            var ordered = list.OrderBy(p => p.Order).ToList();
+            if (needsSave) SaveProjects(ordered);
+            return ordered;
         }
         catch { return new List<Project>(); }
     }

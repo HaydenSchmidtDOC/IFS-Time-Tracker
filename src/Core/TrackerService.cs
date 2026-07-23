@@ -36,10 +36,14 @@ public sealed class TrackerService
         Projects = _store.LoadProjects();
         _state = _store.LoadState();
 
-        // Resume a block that was live when the app last closed.
-        if (_state.ActiveProjectCode is not null && _state.BlockStartUtc is not null)
-            Active = FindByCode(_state.ActiveProjectCode);
-        if (Active is null) { _state.ActiveProjectCode = null; _state.BlockStartUtc = null; }
+        // Resume a block that was live when the app last closed. Id takes priority — it survives
+        // a rename — falling back to Code only for a state.json saved before ids existed.
+        if (_state.BlockStartUtc is not null)
+        {
+            if (_state.ActiveProjectId is { } id) Active = FindById(id);
+            if (Active is null && _state.ActiveProjectCode is { } code) Active = FindByCode(code);
+        }
+        if (Active is null) { _state.ActiveProjectId = null; _state.ActiveProjectCode = null; _state.BlockStartUtc = null; }
     }
 
     // ---------- projects ----------
@@ -47,9 +51,22 @@ public sealed class TrackerService
     public Project? FindByCode(string code)
         => Projects.FirstOrDefault(p => string.Equals(p.Code, code, StringComparison.OrdinalIgnoreCase));
 
+    public Project? FindById(string id)
+        => Projects.FirstOrDefault(p => string.Equals(p.Id, id, StringComparison.Ordinal));
+
+    /// <summary>
+    /// Resolve the live project a historical block belongs to, preferring its stable
+    /// <see cref="TimeBlock.ProjectId"/> (works even if Code/Name/Asn were edited since it was
+    /// recorded) and falling back to <see cref="TimeBlock.ProjectCode"/> for rows logged before
+    /// project ids existed. Null if the project has since been deleted.
+    /// </summary>
+    public Project? FindByBlock(TimeBlock b)
+        => (!string.IsNullOrEmpty(b.ProjectId) ? FindById(b.ProjectId) : null) ?? FindByCode(b.ProjectCode);
+
     /// <summary>The last project that was tracked (for resuming after a stop), if it still exists.</summary>
     public Project? LastActive
-        => _state.LastActiveProjectCode is { } c ? FindByCode(c) : null;
+        => (_state.LastActiveProjectId is { } id ? FindById(id) : null)
+           ?? (_state.LastActiveProjectCode is { } c ? FindByCode(c) : null);
 
     /// <summary>Resume tracking the last project (used by the pill's Start toggle when stopped).</summary>
     public void ResumeLast()
@@ -60,6 +77,7 @@ public sealed class TrackerService
 
     public void AddProject(Project p)
     {
+        if (string.IsNullOrEmpty(p.Id)) p.Id = Guid.NewGuid().ToString("N");
         p.Order = Projects.Count == 0 ? 0 : Projects.Max(x => x.Order) + 1;
         Projects.Add(p);
         _store.SaveProjects(Projects);
@@ -69,9 +87,20 @@ public sealed class TrackerService
     public void UpdateProjects(IEnumerable<Project> projects)
     {
         Projects = projects.ToList();
+        foreach (var p in Projects)
+            if (string.IsNullOrEmpty(p.Id)) p.Id = Guid.NewGuid().ToString("N");
         _store.SaveProjects(Projects);
-        // If the active project was removed, stop.
-        if (Active is not null && FindByCode(Active.Code) is null) Stop();
+
+        if (Active is not null)
+        {
+            // Re-resolve by Id rather than just checking existence — Active would otherwise keep
+            // pointing at the pre-edit object (stale Code/Name/Asn/Color) until the next
+            // StartOrSwitch, since the working copy edited in Settings is a set of clones, not
+            // the same instances. If it's gone entirely, stop instead of tracking a ghost.
+            var stillExists = FindById(Active.Id);
+            if (stillExists is null) Stop();
+            else Active = stillExists;
+        }
         Changed?.Invoke();
     }
 
@@ -91,10 +120,12 @@ public sealed class TrackerService
     /// <summary>Begin tracking a project. Auto-banks any running block first (with optional note).</summary>
     public void StartOrSwitch(Project project, string notes = "")
     {
-        if (IsRunning && Active is not null && Active.Code == project.Code) return; // already live
+        if (IsRunning && Active is not null && Active.Id == project.Id) return; // already live
         if (IsRunning) BankCurrent(_utcNow(), notes);
         Active = project;
+        _state.ActiveProjectId = project.Id;
         _state.ActiveProjectCode = project.Code;
+        _state.LastActiveProjectId = project.Id;
         _state.LastActiveProjectCode = project.Code;
         _state.BlockStartUtc = _utcNow();
         _store.SaveState(_state);
@@ -106,6 +137,7 @@ public sealed class TrackerService
     {
         if (IsRunning) BankCurrent(_utcNow(), notes);
         Active = null;
+        _state.ActiveProjectId = null;
         _state.ActiveProjectCode = null;
         _state.BlockStartUtc = null;
         _store.SaveState(_state);
@@ -125,6 +157,7 @@ public sealed class TrackerService
             BankCurrent(idleStartUtc, notes);
         // Resume fresh from now (BankCurrent cleared start).
         Active = project;
+        _state.ActiveProjectId = project.Id;
         _state.ActiveProjectCode = project.Code;
         _state.BlockStartUtc = _utcNow();
         _store.SaveState(_state);
@@ -139,6 +172,8 @@ public sealed class TrackerService
 
         var block = new TimeBlock
         {
+            Id              = Guid.NewGuid().ToString("N"),
+            ProjectId       = Active.Id,
             ProjectCode     = Active.Code,
             Asn             = Active.Asn,
             ProjectName     = Active.Name,

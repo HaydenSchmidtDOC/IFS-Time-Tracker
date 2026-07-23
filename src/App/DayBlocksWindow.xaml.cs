@@ -39,7 +39,7 @@ public partial class DayBlocksWindow : Window
 
     private UIElement BuildRow(TimeBlock b)
     {
-        var project = A.Tracker.FindByCode(b.ProjectCode);
+        var project = A.Tracker.FindByBlock(b);
         var color = project is not null ? ColorUtil.Brush(project.Color) : (Brush)FindResource("TextFaint");
 
         var normal = new Grid();
