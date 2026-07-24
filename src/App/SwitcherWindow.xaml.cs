@@ -72,11 +72,17 @@ public partial class SwitcherWindow : Window
     {
         if (_rows.Count == 0) { Close(); return; }
         var chosen = _rows[_hi].Project;
-        _closing = true;
         bool isLive = A.Tracker.IsRunning && chosen.Id == A.Tracker.Active?.Id;
+
+        // Close this window BEFORE stopping/switching, not after — both of those can pop the
+        // "add a note" prompt (see App.MaybeAskNote), and closing afterward meant this window
+        // was still fully open underneath it, the two stacked on top of each other. chosen/
+        // isLive are captured locals, so closing first doesn't lose anything they need.
+        _closing = true;
+        Close();
+
         if (isLive) A.StopWithPrompt();
         else A.StartOrSwitch(chosen);
-        Close();
     }
 
     protected override void OnKeyDown(KeyEventArgs e)
