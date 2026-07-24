@@ -20,6 +20,9 @@ publish/
 # additionally guards a root-level data/ if the exe is ever run from the repo root.
 /data/
 
+# ---- Personal dev notes/bookmarks (not shipped, not project docs) ----
+/notes/
+
 # ---- OS noise ----
 Thumbs.db
 Desktop.ini
