@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
 using TimeTracker.App.UI;
 
@@ -22,6 +23,15 @@ public partial class PillWindow : Window
 
     [StructLayout(LayoutKind.Sequential)] private struct POINT { public int X; public int Y; }
     [DllImport("user32.dll")] private static extern bool GetCursorPos(out POINT p);
+
+    // ShowInTaskbar="False" only hides the taskbar button — Alt-Tab has its own rule (it skips
+    // owned windows and anything carrying WS_EX_TOOLWINDOW). Without this the pill still shows
+    // up as a tabbable window despite never appearing in the taskbar.
+    private const int GWL_EXSTYLE = -20;
+    private const int WS_EX_TOOLWINDOW = 0x00000080;
+    private const int WS_EX_APPWINDOW = 0x00040000;
+    [DllImport("user32.dll")] private static extern int GetWindowLong(IntPtr hwnd, int index);
+    [DllImport("user32.dll")] private static extern int SetWindowLong(IntPtr hwnd, int index, int newStyle);
 
     private bool _dragging, _moved, _collapsed, _loaded;
     private Point _cursorStart, _winStart;
@@ -50,6 +60,14 @@ public partial class PillWindow : Window
         // re-run on a state change — without this it'd stay stale after a live theme flip until
         // the next actual start/stop/switch.
         A.ThemeChanged += UpdateState;
+    }
+
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+        var hwnd = new WindowInteropHelper(this).Handle;
+        int exStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
+        SetWindowLong(hwnd, GWL_EXSTYLE, (exStyle | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW);
     }
 
     private void OnLoaded(object? sender, RoutedEventArgs e)
