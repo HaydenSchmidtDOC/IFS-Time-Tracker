@@ -13,6 +13,15 @@ public sealed class TrackerService
 
     private TrackerState _state;
 
+    /// <summary>Blocks banked by an idle discard (see DiscardIdleSince) that are still "part of"
+    /// the session currently running — the note-less first half of a split. If the CURRENT
+    /// session eventually ends with a note (Stop/StartOrSwitch — see FinishCurrentBlock), that
+    /// note is backfilled onto these too, so it covers the whole work session rather than just
+    /// the part after you came back. In-memory only (not persisted): if the app restarts in
+    /// between, the link is lost and these just keep their blank note, same as before this
+    /// existed — a reasonable fallback for an edge case on top of an edge case.</summary>
+    private readonly List<TimeBlock> _pendingNoteBlocks = new();
+
     public List<Project> Projects { get; private set; }
 
     /// <summary>The project currently being tracked, or null when stopped.</summary>
@@ -139,7 +148,7 @@ public sealed class TrackerService
     {
         if (IsRunning && Active is not null && Active.Id == project.Id) return; // already live
         if (WouldCollideIfStartedNow() is TimeBlock collision) { StartRefused?.Invoke(collision); return; }
-        if (IsRunning) BankCurrent(_utcNow(), notes);
+        if (IsRunning) FinishCurrentBlock(_utcNow(), notes);
         Active = project;
         _state.ActiveProjectId = project.Id;
         _state.ActiveProjectCode = project.Code;
@@ -185,7 +194,7 @@ public sealed class TrackerService
         // Same shutdown sequence Stop() uses, just ending at the collision's start instead of
         // "now" — truncating rather than silently running the banked block past it.
         var collisionStartUtc = DateTime.SpecifyKind(collision.StartLocal, DateTimeKind.Local).ToUniversalTime();
-        BankCurrent(collisionStartUtc, "");
+        FinishCurrentBlock(collisionStartUtc, "");
         Active = null;
         _state.ActiveProjectId = null;
         _state.ActiveProjectCode = null;
@@ -199,7 +208,7 @@ public sealed class TrackerService
     /// <summary>Stop tracking, banking the current block with an optional note.</summary>
     public void Stop(string notes = "")
     {
-        if (IsRunning) BankCurrent(_utcNow(), notes);
+        if (IsRunning) FinishCurrentBlock(_utcNow(), notes);
         Active = null;
         _state.ActiveProjectId = null;
         _state.ActiveProjectCode = null;
@@ -210,7 +219,9 @@ public sealed class TrackerService
 
     /// <summary>
     /// Discard an idle span: bank the current block up to <paramref name="idleStartUtc"/>,
-    /// then resume the same project from now — so the away time never reaches the log.
+    /// then resume the same project from now — so the away time never reaches the log. The
+    /// banked (note-less) block is remembered — see _pendingNoteBlocks — so a note typed when
+    /// this continued session eventually ends gets backfilled onto it too.
     /// </summary>
     public void DiscardIdleSince(DateTime idleStartUtc, string notes = "")
     {
@@ -218,7 +229,10 @@ public sealed class TrackerService
         var project = Active;
         // Only truncate if the idle start is within the current block.
         if (_state.BlockStartUtc is DateTime start && idleStartUtc > start)
-            BankCurrent(idleStartUtc, notes);
+        {
+            var banked = BankCurrent(idleStartUtc, notes);
+            if (banked is not null) _pendingNoteBlocks.Add(banked);
+        }
         // Resume fresh from now (BankCurrent cleared start).
         Active = project;
         _state.ActiveProjectId = project.Id;
@@ -228,10 +242,37 @@ public sealed class TrackerService
         Changed?.Invoke();
     }
 
-    /// <summary>Append the current block to the log, ending at <paramref name="endUtc"/>.</summary>
-    private void BankCurrent(DateTime endUtc, string notes)
+    /// <summary>Ends the current block for real (Stop, StartOrSwitch, or the live-collision
+    /// auto-stop) — as opposed to DiscardIdleSince's bank, which continues the same logical
+    /// session under a new block. Banks with the given note, then — if a note was actually
+    /// given — backfills that same note onto any earlier blocks this session was split from by
+    /// an idle discard, so it reads as one note covering the whole work session rather than just
+    /// the part after you came back. Clears that pending link regardless, since it's now
+    /// resolved one way or the other and mustn't leak into whatever gets tracked next.</summary>
+    private void FinishCurrentBlock(DateTime endUtc, string notes)
     {
-        if (Active is null || _state.BlockStartUtc is not DateTime startUtc) return;
+        BankCurrent(endUtc, notes);
+        if (!string.IsNullOrWhiteSpace(notes))
+        {
+            foreach (var pending in _pendingNoteBlocks)
+            {
+                var updated = new TimeBlock
+                {
+                    StartLocal = pending.StartLocal, EndLocal = pending.EndLocal,
+                    Notes = notes, Unscheduled = pending.Unscheduled,
+                };
+                _log.UpdateBlock(pending, updated);
+            }
+        }
+        _pendingNoteBlocks.Clear();
+    }
+
+    /// <summary>Append the current block to the log, ending at <paramref name="endUtc"/>. Returns
+    /// the banked block, or null if it was zero-length and skipped (e.g. an immediate double
+    /// switch) — see DiscardIdleSince, which needs the block itself, not just a side effect.</summary>
+    private TimeBlock? BankCurrent(DateTime endUtc, string notes)
+    {
+        if (Active is null || _state.BlockStartUtc is not DateTime startUtc) return null;
         if (endUtc < startUtc) endUtc = startUtc;
 
         var block = new TimeBlock
@@ -248,11 +289,10 @@ public sealed class TrackerService
         };
         _state.BlockStartUtc = null;
         // Skip zero-length noise blocks (e.g. an immediate double switch).
-        if (block.DurationSeconds > 0)
-        {
-            _log.Append(block);
-            BlockLogged?.Invoke(block);
-        }
+        if (block.DurationSeconds <= 0) return null;
+        _log.Append(block);
+        BlockLogged?.Invoke(block);
+        return block;
     }
 
     // ---------- state helpers ----------

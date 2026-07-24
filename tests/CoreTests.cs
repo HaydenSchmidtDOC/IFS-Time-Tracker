@@ -121,6 +121,63 @@ public class TrackerServiceTests : IDisposable
     }
 
     [Fact]
+    public void NoteOnStop_BackfillsOntoBlocksSplitByEarlierIdleDiscards()
+    {
+        var svc = NewService();
+        var a = P("CONV-CAL", "100320");
+        svc.AddProject(a);
+
+        svc.StartOrSwitch(a);
+        _now = _now.AddMinutes(10);
+        var idle1 = _now;
+        _now = _now.AddMinutes(20);
+        svc.DiscardIdleSince(idle1);   // split #1 (10 min), no note
+
+        _now = _now.AddMinutes(15);
+        var idle2 = _now;
+        _now = _now.AddMinutes(5);
+        svc.DiscardIdleSince(idle2);   // split #2 (15 min), no note — a SECOND break
+
+        _now = _now.AddMinutes(20);    // final stretch (20 min)
+        svc.Stop("wrapped up the conveyor calibration");
+
+        var blocks = _log.ReadMonth(2026, 7).OrderBy(b => b.StartLocal).ToList();
+        Assert.Equal(3, blocks.Count);
+        Assert.All(blocks, b => Assert.Equal("wrapped up the conveyor calibration", b.Notes));
+        Assert.Equal(600, blocks[0].DurationSeconds);  // 10 min
+        Assert.Equal(900, blocks[1].DurationSeconds);  // 15 min
+        Assert.Equal(1200, blocks[2].DurationSeconds); // 20 min
+    }
+
+    [Fact]
+    public void NoteBackfill_DoesNotLeakIntoTheNextUnrelatedSession()
+    {
+        var svc = NewService();
+        var a = P("CONV-CAL", "100320");
+        var b = P("ADMIN", "100001");
+        svc.AddProject(a); svc.AddProject(b);
+
+        svc.StartOrSwitch(a);
+        _now = _now.AddMinutes(10);
+        var idle1 = _now;
+        _now = _now.AddMinutes(20);
+        svc.DiscardIdleSince(idle1);   // split, no note
+
+        _now = _now.AddMinutes(10);
+        svc.Stop();                    // ends with NO note — should just clear the pending link
+
+        svc.StartOrSwitch(b);
+        _now = _now.AddMinutes(30);
+        svc.Stop("unrelated admin work");
+
+        var blocks = _log.ReadMonth(2026, 7).OrderBy(b => b.StartLocal).ToList();
+        Assert.Equal(3, blocks.Count);
+        Assert.Equal("", blocks[0].Notes);                    // the earlier split stays note-less
+        Assert.Equal("", blocks[1].Notes);                    // the no-note stop stays note-less
+        Assert.Equal("unrelated admin work", blocks[2].Notes); // only the actually-noted block gets it
+    }
+
+    [Fact]
     public void TodayTotals_IncludeLiveBlock()
     {
         var svc = NewService();
