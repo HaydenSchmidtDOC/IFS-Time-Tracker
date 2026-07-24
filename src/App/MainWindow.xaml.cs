@@ -149,7 +149,14 @@ public partial class MainWindow : Window
         }
     }
 
-    private void Primary_Click(object sender, RoutedEventArgs e)
+    private void Primary_Click(object sender, RoutedEventArgs e) => ToggleSelected();
+
+    /// <summary>Start/switch to the selected project, or — if it's already the live one — stop
+    /// it instead. Shared by the round button, double-click, and Enter, so all three behave the
+    /// same way: double-click/Enter used to always (re)start regardless, which meant double-
+    /// clicking the already-running project silently did nothing (TrackerService.StartOrSwitch's
+    /// own "already live" guard), instead of stopping it the way the button does.</summary>
+    private void ToggleSelected()
     {
         var tracker = A.Tracker;
         var sel = Selected;
@@ -159,16 +166,11 @@ public partial class MainWindow : Window
         else A.StartOrSwitch(sel.Project);
     }
 
-    private void StartSelected()
-    {
-        if (Selected is { } sel) A.StartOrSwitch(sel.Project);
-    }
-
     private void ProjectList_SelectionChanged(object sender, SelectionChangedEventArgs e) { UpdatePrimary(); UpdateLive(); }
-    private void ProjectList_DoubleClick(object sender, MouseButtonEventArgs e) => StartSelected();
+    private void ProjectList_DoubleClick(object sender, MouseButtonEventArgs e) => ToggleSelected();
     private void ProjectList_KeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key == Key.Enter) { StartSelected(); e.Handled = true; }
+        if (e.Key == Key.Enter) { ToggleSelected(); e.Handled = true; }
     }
 
     private void AddProject_Click(object sender, RoutedEventArgs e)
