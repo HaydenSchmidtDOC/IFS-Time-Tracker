@@ -38,7 +38,9 @@
                     <CheckBox x:Name="StartMinimizedCheck" Content="Start minimised (tray/pill only, no window)"
                               Foreground="{DynamicResource Text}" FontSize="13" Margin="0,0,0,8"/>
                     <CheckBox x:Name="StartWithWindowsCheck" Content="Start automatically when Windows starts"
-                              Foreground="{DynamicResource Text}" FontSize="13" Margin="0,0,0,10"/>
+                              Foreground="{DynamicResource Text}" FontSize="13" Margin="0,0,0,4"/>
+                    <TextBlock Text="Only reliable if the app isn't running from a OneDrive-synced folder — cloud sync can still be mounting the file when Windows processes startup entries, so the launch silently does nothing."
+                               FontSize="11" Foreground="{DynamicResource TextFaint}" Margin="0,0,0,10" TextWrapping="Wrap"/>
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
