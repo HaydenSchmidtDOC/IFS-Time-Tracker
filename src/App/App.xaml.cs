@@ -107,7 +107,9 @@ public partial class App : Application
 
         Tracker.Changed += () => { UpdateTray(); StateChanged?.Invoke(); };
         Tracker.StartRefused += collision => InfoPrompt.Show("Can't start tracking", CollisionMessage(collision, ended: false));
-        Tracker.LiveSessionCollided += collision => InfoPrompt.Show("Session ended", CollisionMessage(collision, ended: true));
+        // No LiveSessionCollided subscription here (unlike StartRefused above) — that fires only
+        // AFTER the block is already banked, too late to fold a note-prompt into the same window.
+        // CheckForLiveCollisionWithPrompt below drives that flow directly instead.
 
         BuildTray();
 
@@ -126,7 +128,7 @@ public partial class App : Application
         _uiTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         // Checked first, before Tick fires — if it stops the session, everything Tick refreshes
         // (pill, timesheet, tray) should already see the post-stop state, not lag a tick behind.
-        _uiTimer.Tick += (_, _) => { Tracker.CheckForLiveCollision(); Tick?.Invoke(); UpdateTrayTooltip(); };
+        _uiTimer.Tick += (_, _) => { CheckForLiveCollisionWithPrompt(); Tick?.Invoke(); UpdateTrayTooltip(); };
         _uiTimer.Start();
 
         UpdateTray();
@@ -251,8 +253,11 @@ public partial class App : Application
         _tray.Text = text.Length > 63 ? text[..63] : text;
     }
 
-    /// <summary>Shared wording for both tracking-collision popups (see Tracker.StartRefused/
-    /// LiveSessionCollided) — same facts, phrased for whichever moment triggered it.</summary>
+    /// <summary>Shared wording for both tracking-collision moments — same facts, phrased for
+    /// whichever triggered it. The refused-start case (ended: false, see Tracker.StartRefused)
+    /// always shows as its own InfoPrompt; the auto-stopped case (ended: true) is normally folded
+    /// into NotePrompt's own explanation line instead (see CheckForLiveCollisionWithPrompt) and
+    /// only shows as a standalone InfoPrompt when note-prompting is turned off.</summary>
     private string CollisionMessage(TimeBlock collision, bool ended)
     {
         var p = Tracker.FindByBlock(collision);
@@ -260,7 +265,7 @@ public partial class App : Application
             ? (string.IsNullOrWhiteSpace(p.Name) ? p.Code : $"{p.Code} · {p.Name}")
             : collision.ProjectCode;
         return ended
-            ? $"You already have {who} logged from {collision.StartLocal:HH:mm}, so tracking stopped there instead of running into it."
+            ? $"Recording reached an already-logged {who} entry at {collision.StartLocal:HH:mm}, so it was stopped there automatically."
             : $"You already have {who} logged for {collision.StartLocal:HH:mm}–{collision.EndLocal:HH:mm} today.";
     }
 
@@ -309,6 +314,23 @@ public partial class App : Application
     {
         if (!Settings.PromptForNote) return "";
         return NotePrompt.Ask(ending) ?? "";
+    }
+
+    /// <summary>Runs once a second (see the _uiTimer.Tick hookup) to notice a live session that's
+    /// grown into an existing block ahead of it, and — unlike the old CheckForLiveCollision, which
+    /// stopped it with an empty note before anyone could react — gives the same note-prompting
+    /// chance a normal Stop gets first. When notes are enabled, that's ONE window doing double
+    /// duty: NotePrompt's explanation line is swapped for the collision explanation instead of a
+    /// separate "Session ended" popup stacking on top. Notes off skips straight to the plain
+    /// heads-up, since there's nothing to collect.</summary>
+    private void CheckForLiveCollisionWithPrompt()
+    {
+        if (Tracker.PeekLiveCollision() is not { } collision) return;
+        string note = "";
+        if (Settings.PromptForNote && Tracker.Active is { } ending)
+            note = NotePrompt.Ask(ending, explanation: CollisionMessage(collision, ended: true)) ?? "";
+        Tracker.FinishLiveCollision(collision, note);
+        if (!Settings.PromptForNote) InfoPrompt.Show("Session ended", CollisionMessage(collision, ended: true));
     }
 
     public void OpenSwitcher()

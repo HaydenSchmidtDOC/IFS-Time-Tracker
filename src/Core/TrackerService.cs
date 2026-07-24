@@ -46,8 +46,11 @@ public sealed class TrackerService
     /// <summary>
     /// Raised when a live session was stopped early because it grew into the start of an
     /// existing block placed ahead of it — the UI shows an explanation. This only ever fires from
-    /// <see cref="CheckForLiveCollision"/>, which the UI calls once a second; TrackerService
-    /// doesn't own a timer itself (matches Tick living in App, not here).
+    /// <see cref="FinishLiveCollision"/>, called once the UI has finished deciding on (and
+    /// collecting, if applicable) a note for the block it's about to bank — see
+    /// <see cref="PeekLiveCollision"/>, which the UI calls once a second to notice the collision
+    /// in the first place; TrackerService doesn't own a timer itself (matches Tick living in App,
+    /// not here).
     /// </summary>
     public event Action<TimeBlock>? LiveSessionCollided;
 
@@ -173,28 +176,37 @@ public sealed class TrackerService
 
     /// <summary>
     /// Call once a second while a session is running (TrackerService doesn't own a timer itself
-    /// — see App's Tick). If the live session has grown into the start of an existing block
-    /// placed ahead of it, stops the session right there — truncated at that block's start, not
-    /// past it, so nothing overlaps — and raises <see cref="LiveSessionCollided"/> with the block
-    /// it hit so the UI can explain why. Returns the same block for convenience; null on the
-    /// overwhelmingly common no-collision tick.
+    /// — see App's Tick) to check WITHOUT stopping anything yet whether the live session has
+    /// grown into the start of an existing block placed ahead of it. Split out from actually
+    /// finishing it (see <see cref="FinishLiveCollision"/>) so the UI gets a chance to prompt for
+    /// a note first, exactly like a normal Stop — banking straight away here would lock in an
+    /// empty note before that prompt could ever run.
     /// </summary>
-    public TimeBlock? CheckForLiveCollision()
+    public TimeBlock? PeekLiveCollision()
     {
         if (!IsRunning || _state.BlockStartUtc is not DateTime startUtc) return null;
         var nowLocal = _utcNow().ToLocalTime();
         var startLocal = startUtc.ToLocalTime();
 
-        var collision = _log.ReadRange(nowLocal.Date, nowLocal.Date)
+        return _log.ReadRange(nowLocal.Date, nowLocal.Date)
             .Where(b => !b.Unscheduled && b.StartLocal.Date == nowLocal.Date && b.StartLocal > startLocal && b.StartLocal <= nowLocal)
             .OrderBy(b => b.StartLocal)
             .FirstOrDefault();
-        if (collision is null) return null;
+    }
 
-        // Same shutdown sequence Stop() uses, just ending at the collision's start instead of
-        // "now" — truncating rather than silently running the banked block past it.
+    /// <summary>
+    /// Actually stops the live session at <paramref name="collision"/>'s start (truncated, never
+    /// past it, so nothing overlaps) with whatever note the UI collected — see
+    /// <see cref="PeekLiveCollision"/>, which the caller uses first to decide whether to prompt
+    /// for one at all — then raises <see cref="LiveSessionCollided"/> so the UI can explain why
+    /// tracking stopped. A no-op if the session ended some other way while that prompt was up
+    /// (e.g. its own once-a-second re-check firing again before the modal note prompt closed).
+    /// </summary>
+    public void FinishLiveCollision(TimeBlock collision, string notes = "")
+    {
+        if (!IsRunning) return;
         var collisionStartUtc = DateTime.SpecifyKind(collision.StartLocal, DateTimeKind.Local).ToUniversalTime();
-        FinishCurrentBlock(collisionStartUtc, "");
+        FinishCurrentBlock(collisionStartUtc, notes);
         Active = null;
         _state.ActiveProjectId = null;
         _state.ActiveProjectCode = null;
@@ -202,7 +214,6 @@ public sealed class TrackerService
         _store.SaveState(_state);
         Changed?.Invoke();
         LiveSessionCollided?.Invoke(collision);
-        return collision;
     }
 
     /// <summary>Stop tracking, banking the current block with an optional note.</summary>
