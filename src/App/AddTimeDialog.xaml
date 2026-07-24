@@ -75,9 +75,23 @@
                     <TextBox x:Name="EndTimeBox" Style="{StaticResource Input}" HorizontalContentAlignment="Center"/>
                 </StackPanel>
             </Grid>
+            <!-- Shown only when the typed/dragged span cleanly spans one or more whole existing
+                 blocks — see AddTimeDialog.RefreshTimesHint. A genuinely invalid (partial)
+                 overlap still goes through ErrorText below instead, only on pressing Add. -->
+            <TextBlock x:Name="TimesHintText" FontSize="11" Foreground="{DynamicResource TextFaint}"
+                       TextWrapping="Wrap" Margin="0,8,0,0" Visibility="Collapsed"/>
 
             <TextBlock x:Name="ErrorText" Foreground="{DynamicResource Live}" FontSize="12"
                        Margin="0,10,0,0" Visibility="Collapsed" TextWrapping="Wrap"/>
+
+            <!-- Edit mode only — see AskEdit. A fresh add collects its note via the normal
+                 note-prompt after Commit (matching a live stop/switch), but correcting an
+                 existing block is exactly the place to fix a typo in — or add detail to — its
+                 note too, rather than leaving it fixed at whatever was recorded originally.
+                 Shown regardless of Amount/Times kind, so it sits outside both of those panels. -->
+            <TextBlock x:Name="NoteLabel" Text="NOTE" Style="{StaticResource EyebrowText}"
+                       Margin="0,14,0,6" Visibility="Collapsed"/>
+            <TextBox x:Name="NoteBox" Style="{StaticResource Input}" MaxLength="500" Visibility="Collapsed"/>
 
             <!-- Edit mode only — see AskEdit. A tiny/short block in the calendar view has no room
                  to show a hover-✕ or drag grips, so deleting (and resizing, via the Start/End
