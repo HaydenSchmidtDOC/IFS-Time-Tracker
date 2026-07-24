@@ -76,9 +76,10 @@ public sealed class Settings
     /// </summary>
     public bool ChartMergeAllSessions { get; set; } = true;
 
-    /// <summary>Which timesheet view opens by default: "Bar" (hours totalled) or "Calendar"
-    /// (24h time-of-day breakdown). The in-window toggle can still switch either way each time —
-    /// this only decides what a fresh open starts on.</summary>
+    /// <summary>Which timesheet view ("Bar"/hours-totalled or "Calendar"/24h time-of-day) was
+    /// last selected via the in-window toggle — written every time it's switched, so the next
+    /// open just resumes wherever the previous session left off, rather than a manually
+    /// configured fixed default.</summary>
     public string DefaultTimesheetView { get; set; } = "Bar";
 
     /// <summary>

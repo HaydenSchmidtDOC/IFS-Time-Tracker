@@ -26,8 +26,10 @@ public partial class TimesheetWindow : Window
     private FrameworkElement? _currentChart;
     private DateTime _lastWheelNav = DateTime.MinValue;
 
-    /// <summary>Which of the two timesheet renderers is showing. Not persisted mid-session — see
-    /// AnimateOpenFrom, which resets this to Settings.DefaultTimesheetView on every open.</summary>
+    /// <summary>Which of the two timesheet renderers is showing. Every switch (see the header
+    /// toggle's SelectionChanged below) writes back to Settings.DefaultTimesheetView, and
+    /// AnimateOpenFrom reads it back on each fresh open — so the window just resumes on
+    /// whichever view was last used rather than a fixed, separately-configured default.</summary>
     private enum ViewMode { Bar, Calendar }
     private ViewMode _viewMode;
     private readonly SegmentedToggle _viewToggle;
@@ -135,9 +137,14 @@ public partial class TimesheetWindow : Window
             _calendarScrollOffset = null; // re-center on work hours each time Calendar is switched into
             CalendarPxPerHour = 60; // and reset any zoom from a prior calendar session
             RenderCurrentWeek(0, crossFade: true);
+            UpdateMergeToggleVisibility(animate: true);
+            // Remember this as the view a fresh open should resume on — see ViewMode's remarks.
+            A.Settings.DefaultTimesheetView = _viewMode == ViewMode.Calendar ? "Calendar" : "Bar";
+            A.Store.SaveSettings(A.Settings);
         };
         ViewToggleHost.Content = _viewToggle.Root;
         InitTimesheetSettingsPopover();
+        UpdateMergeToggleVisibility(animate: false);
 
         SourceInitialized += (_, _) =>
             DarkTitleBar.Apply(new WindowInteropHelper(this).Handle, !A.IsLightTheme);
@@ -220,6 +227,7 @@ public partial class TimesheetWindow : Window
         _calendarScrollOffset = null;
         CalendarPxPerHour = 60;
         _viewToggle.SetIndex(_viewMode == ViewMode.Calendar ? 1 : 0, animate: false);
+        UpdateMergeToggleVisibility(animate: false);
         RenderCurrentWeek(0); // bounds are already final, so this renders at the correct size immediately
     }
 
@@ -368,7 +376,7 @@ public partial class TimesheetWindow : Window
     // DensitySliderStyle in the XAML, an index-based slider rather than a continuous range.
     private static readonly double[] DensityPresets = { 0, 0.05, 0.1, 0.25, 0.5, 1, 2 };
 
-    private SegmentedToggle _defaultViewToggle = null!;
+    private ToggleSwitch _mergeSessionsToggle = null!;
 
     private void TimesheetSettings_Click(object sender, RoutedEventArgs e)
         => TimesheetSettingsPopup.IsOpen = !TimesheetSettingsPopup.IsOpen;
@@ -377,25 +385,19 @@ public partial class TimesheetWindow : Window
     {
         var s = A.Settings;
 
-        // "Totals" to match the main header's toggle wording exactly — the stored setting value
-        // ("Bar"/"Calendar") is an internal detail and doesn't need to match the label.
-        _defaultViewToggle = new SegmentedToggle("Totals", "Calendar", s.DefaultTimesheetView == "Calendar" ? 1 : 0, fontSize: 12);
-        _defaultViewToggle.SelectionChanged += idx =>
-        {
-            // Only affects what a FUTURE open starts on (see ViewMode's remarks) — doesn't touch
-            // _viewMode or re-render the currently-open session.
-            A.Settings.DefaultTimesheetView = idx == 1 ? "Calendar" : "Bar";
-            A.Store.SaveSettings(A.Settings);
-        };
-        DefaultViewToggleHost.Content = _defaultViewToggle.Root;
-
         PopulateSnapCombo(EdgeSnapCombo, EdgeSnapOptions, s.EdgeSnapMinutes, v => A.Settings.EdgeSnapMinutes = v);
         PopulateSnapCombo(MoveSnapCombo, MoveSnapOptions, s.MoveSnapMinutes, v => A.Settings.MoveSnapMinutes = v);
         PopulateSnapCombo(ManualMaxCombo, ManualMaxOptions, s.ManualBlockMaxMinutes, v => A.Settings.ManualBlockMaxMinutes = v);
 
-        MergeSessionsCheck.IsChecked = s.ChartMergeAllSessions;
-        MergeSessionsCheck.Checked += MergeSessionsCheck_Changed;
-        MergeSessionsCheck.Unchecked += MergeSessionsCheck_Changed;
+        _mergeSessionsToggle = new ToggleSwitch(s.ChartMergeAllSessions,
+            tooltip: "Merge every session for a project into one bar.\nOff: only back-to-back sessions with a matching note merge — the same project touched again later gets its own bar.");
+        _mergeSessionsToggle.Toggled += on =>
+        {
+            A.Settings.ChartMergeAllSessions = on;
+            A.Store.SaveSettings(A.Settings);
+            RenderCurrentWeek(0);
+        };
+        MergeSessionsToggleHost.Content = _mergeSessionsToggle.Root;
 
         // If the saved value is already index 0, setting Value=0 below is a no-op and
         // ValueChanged never fires — so the label text is applied explicitly here too, not
@@ -405,6 +407,30 @@ public partial class TimesheetWindow : Window
         DensitySlider.Value = startIdx;
         RefreshDensityLabel(startIdx);
         DensitySlider.ValueChanged += DensitySlider_ValueChanged;
+    }
+
+    /// <summary>Fades the merge-sessions toggle in/out depending on the current view — it only
+    /// affects how the bar/Totals view groups a day's sessions, so it's hidden (not just
+    /// disabled) whenever Calendar is showing rather than sitting there doing nothing. Opacity-
+    /// only (not Collapsed) so the column it lives in doesn't change width mid-fade and shove the
+    /// legend's scroll area around; IsHitTestVisible still tracks it so a hidden toggle can't be
+    /// clicked through.</summary>
+    private void UpdateMergeToggleVisibility(bool animate)
+    {
+        bool show = _viewMode != ViewMode.Calendar;
+        MergeSessionsPanel.IsHitTestVisible = show;
+        double target = show ? 1 : 0;
+        MergeSessionsPanel.BeginAnimation(OpacityProperty, null); // stop any in-flight fade first
+        if (animate)
+        {
+            MergeSessionsPanel.BeginAnimation(OpacityProperty,
+                new DoubleAnimation(MergeSessionsPanel.Opacity, target, TimeSpan.FromMilliseconds(160))
+                { EasingFunction = new CubicEase { EasingMode = show ? EasingMode.EaseOut : EasingMode.EaseIn } });
+        }
+        else
+        {
+            MergeSessionsPanel.Opacity = target;
+        }
     }
 
     /// <summary>Fills a snap/duration dropdown with fixed presets (inserting the current value if
@@ -443,13 +469,6 @@ public partial class TimesheetWindow : Window
 
     private void RefreshDensityLabel(int idx)
         => DensityValueText.Text = DensityPresets[idx] <= 0 ? "Off" : $"Fold under {DensityPresets[idx]:0.##} h";
-
-    private void MergeSessionsCheck_Changed(object sender, RoutedEventArgs e)
-    {
-        A.Settings.ChartMergeAllSessions = MergeSessionsCheck.IsChecked == true;
-        A.Store.SaveSettings(A.Settings);
-        RenderCurrentWeek(0);
-    }
 
     // ==================== data + chart rendering ====================
 
@@ -557,9 +576,15 @@ public partial class TimesheetWindow : Window
     /// couple of hours look misleadingly like "most of the day".</summary>
     private const double AxisFloorHours = 8;
 
+    /// <summary>Rounds up to the nearest multiple of 4 — not 2 — specifically so step
+    /// (axisMax / 4) always lands on a whole number. Multiple-of-2 axis maxes (10h, 14h, ...)
+    /// produced a 2.5h/3.5h step; the gridline labels round that to a whole number for display
+    /// ("0h,00,3h,5h,8h,10h" instead of "0,2.5,5,7.5,10"), which reads as flatly wrong — a
+    /// gridline LABELLED "8h" that's actually sitting at 7.5h, right next to the real 8h
+    /// reference line and looking like it disagrees with it.</summary>
     private static (double axisMax, double step) ComputeAxisScale(double rawMax)
     {
-        double axisMax = Math.Max(AxisFloorHours, Math.Ceiling(rawMax / 2.0) * 2.0);
+        double axisMax = Math.Max(AxisFloorHours, Math.Ceiling(rawMax / 4.0) * 4.0);
         return (axisMax, axisMax / 4.0);
     }
 
@@ -764,7 +789,7 @@ public partial class TimesheetWindow : Window
             canvas.Children.Add(new Line
             {
                 X1 = yAxisW, X2 = width, Y1 = y8, Y2 = y8,
-                Stroke = dimBrush, StrokeThickness = 1, StrokeDashArray = new DoubleCollection { 3, 3 },
+                Stroke = accentBrush, StrokeThickness = 1, StrokeDashArray = new DoubleCollection { 3, 3 },
                 Opacity = 0.55, SnapsToDevicePixels = true,
             });
         }
@@ -1420,6 +1445,24 @@ public partial class TimesheetWindow : Window
                 }
                 headerCanvas.Children.Add(chip);
             }
+        }
+
+        // Current-time indicator — a thin accent-coloured line at "now", only drawn when the
+        // displayed week actually includes today (a past/future week has no "now" to mark). Full
+        // width, not just today's column, matching how the hour gridlines already span the whole
+        // grid — it's a horizontal ruler for "this Y = now" rather than a today-specific marker
+        // (the accent-tinted column highlight above already covers that). Added last, after
+        // every block, so it draws on top of them. No timer of its own: recomputed fresh on every
+        // render, so it advances for free on the same once-a-second rebuild that already keeps a
+        // live block growing.
+        if (days.Contains(today))
+        {
+            double nowY = DateTime.Now.TimeOfDay.TotalHours * CalendarPxPerHour;
+            canvas.Children.Add(new Line
+            {
+                X1 = yAxisW, X2 = width, Y1 = nowY, Y2 = nowY,
+                Stroke = accentBrush, StrokeThickness = 1.5, SnapsToDevicePixels = true,
+            });
         }
 
         // ==================== drag interaction (edge-resize / whole-block move) ====================

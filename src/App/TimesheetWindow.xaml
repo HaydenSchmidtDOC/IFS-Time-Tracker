@@ -190,9 +190,11 @@
                         <TextBlock Text="Timesheet settings" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource Text}"/>
                         <TextBlock Text="Changes apply immediately." FontSize="11" Foreground="{DynamicResource TextFaint}" Margin="0,2,0,16"/>
 
-                        <TextBlock Text="DEFAULT VIEW ON OPEN" Style="{StaticResource EyebrowText}" Margin="0,0,0,6"/>
-                        <ContentControl x:Name="DefaultViewToggleHost" Focusable="False" Margin="0,0,0,16"/>
-
+                        <!-- No manual "default view" control — the header's own Totals/Calendar
+                             toggle already remembers whatever it was last switched to (see the
+                             SelectionChanged handler in the ctor) and that's what a fresh open
+                             resumes on, so a second place to set the same thing would just be
+                             redundant. -->
                         <TextBlock Text="EDGE-RESIZE SNAP (MIN)" Style="{StaticResource EyebrowText}" Margin="0,0,0,6"/>
                         <ComboBox x:Name="EdgeSnapCombo" Style="{StaticResource Dropdown}" Margin="0,0,0,14"/>
 
@@ -204,11 +206,9 @@
 
                         <Border Height="1" Background="{DynamicResource Border}" Margin="0,0,0,16"/>
 
-                        <CheckBox x:Name="MergeSessionsCheck" Content="Merge every session for a project into one bar"
-                                  Foreground="{DynamicResource Text}" FontSize="12.5" Margin="0,0,0,4"/>
-                        <TextBlock Text="Off: only back-to-back sessions with a matching note merge — the same project touched again later gets its own bar."
-                                   FontSize="10.5" Foreground="{DynamicResource TextFaint}" TextWrapping="Wrap" Margin="0,0,0,16"/>
-
+                        <!-- Merge sessions moved out to a toggle switch in the chart's own
+                             bottom-right corner (see Legend row below) — everything else here
+                             stays put. -->
                         <TextBlock Text="FOLD SMALL SEGMENTS" Style="{StaticResource EyebrowText}" Margin="0,0,0,4"/>
                         <TextBlock Text="Groups a day's small segments into one &quot;Other&quot; bar (hover it for the exact breakdown). Bar view only."
                                    FontSize="10.5" Foreground="{DynamicResource TextFaint}" TextWrapping="Wrap" Margin="0,0,0,10"/>
@@ -247,10 +247,32 @@
                     Style="{StaticResource IconBtn}" FontSize="14" ToolTip="Timesheet settings"
                     HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,14,14"/>
 
-            <ScrollViewer Grid.Row="1" Margin="4,14,0,0" VerticalScrollBarVisibility="Disabled"
-                          HorizontalScrollBarVisibility="Auto">
-                <StackPanel x:Name="Legend" Orientation="Horizontal"/>
-            </ScrollViewer>
+            <Grid Grid.Row="1" Margin="4,14,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Disabled"
+                              HorizontalScrollBarVisibility="Auto">
+                    <StackPanel x:Name="Legend" Orientation="Horizontal"/>
+                </ScrollViewer>
+
+                <!-- Merge-sessions toggle — pinned to the screen's own bottom-right corner
+                     instead of buried in the settings popover, since it's the one view setting
+                     changed often enough to want a one-click switch. Populated in code-behind
+                     (ToggleSwitch has no XAML template of its own — see TimesheetWindow ctor).
+                     Only meaningful in the bar/Totals view (it controls how that view's stacked
+                     bars group same-project sessions) — Calendar view places every block at its
+                     own actual time regardless, so this fades out whenever Calendar is showing
+                     rather than sitting there doing nothing. See UpdateMergeToggleVisibility. -->
+                <StackPanel x:Name="MergeSessionsPanel" Grid.Column="1" Orientation="Horizontal"
+                            VerticalAlignment="Center" Margin="12,0,0,0">
+                    <TextBlock Text="Merge sessions" FontSize="11" Foreground="{DynamicResource TextDim}"
+                               VerticalAlignment="Center" Margin="0,0,8,0"/>
+                    <ContentControl x:Name="MergeSessionsToggleHost" Focusable="False"/>
+                </StackPanel>
+            </Grid>
         </Grid>
     </Grid>
 </Window>
