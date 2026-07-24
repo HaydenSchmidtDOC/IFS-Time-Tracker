@@ -7,7 +7,8 @@
         Width="920" Height="640" MinWidth="640" MinHeight="440"
         WindowStyle="None" ResizeMode="CanResize" ShowInTaskbar="True"
         Background="{DynamicResource Bg}" FontFamily="{StaticResource UiFont}"
-        Closing="Window_Closing" StateChanged="Window_StateChanged">
+        Closing="Window_Closing" StateChanged="Window_StateChanged"
+        PreviewMouseDown="Window_PreviewMouseDown">
     <Window.Resources>
         <!-- Density slider: 7 evenly-spaced index positions (0-6), not a continuous range — the
              presets themselves (0/.05/.1/.25/.5/1/2h) aren't evenly spaced, so the slider drives
@@ -174,14 +175,22 @@
 
         <!-- Every timesheet-VIEW setting lives here — a live-apply popover — and nowhere else
              (not in the main Settings window), so there's exactly one place to find/change them.
-             StaysOpen=False light-dismisses on an outside click, like a normal popover. Placed as
-             a sibling of the header Border (a Popup is a top-level overlay, not part of normal
-             Grid flow, so it doesn't need — and can't share — a layout cell of its own). -->
+             Placed as a sibling of the header Border (a Popup is a top-level overlay, not part of
+             normal Grid flow, so it doesn't need — and can't share — a layout cell of its own).
+
+             StaysOpen="False" (WPF's own light-dismiss) turned out to race the gear button's own
+             Click: closing the popup on the mouse-DOWN half of the very click meant to close it,
+             then Click still fired on mouse-UP and reopened it — the popup and the button were
+             independently fighting over the same click with no reliable ordering between them.
+             StaysOpen="True" here removes WPF's dismiss from that fight entirely; RootGrid's own
+             PreviewMouseDown (see TimesheetWindow.xaml.cs) now closes it on an outside click
+             instead, so there's exactly ONE piece of code deciding to close it, and the button's
+             plain toggle in Click is the only thing that can reopen it. -->
         <!-- The cog now lives in the chart card's bottom-right corner (see below), so the popup
              opens upward-left from it instead of downward, keeping it on-screen. -->
         <Popup x:Name="TimesheetSettingsPopup" PlacementTarget="{Binding ElementName=TimesheetSettingsBtn}"
                    Placement="Top" HorizontalOffset="-264" VerticalOffset="-6"
-                   StaysOpen="False" AllowsTransparency="True" PopupAnimation="Fade">
+                   StaysOpen="True" AllowsTransparency="True" PopupAnimation="Fade">
                 <Border Background="{DynamicResource Surface}" CornerRadius="12" Width="280" Margin="8">
                     <Border.Effect>
                         <DropShadowEffect BlurRadius="12" ShadowDepth="3" Opacity="0.34" Color="#161C2A"/>
@@ -195,15 +204,20 @@
                              SelectionChanged handler in the ctor) and that's what a fresh open
                              resumes on, so a second place to set the same thing would just be
                              redundant. -->
-                        <TextBlock Text="EDGE-RESIZE SNAP (MIN)" Style="{StaticResource EyebrowText}" Margin="0,0,0,6"/>
-                        <ComboBox x:Name="EdgeSnapCombo" Style="{StaticResource Dropdown}" Margin="0,0,0,14"/>
+                        <TextBlock Text="CALENDAR DRAG SNAP (MIN)" Style="{StaticResource EyebrowText}" Margin="0,0,0,6"/>
+                        <TextBlock Text="Resizing, moving, or drag-adding a block in Calendar view all snap to this same grid."
+                                   FontSize="10.5" Foreground="{DynamicResource TextFaint}" TextWrapping="Wrap" Margin="0,0,0,6"/>
+                        <ComboBox x:Name="DragSnapCombo" Style="{StaticResource Dropdown}" Margin="0,0,0,16"/>
 
-                        <TextBlock Text="MOVE SNAP (MIN)" Style="{StaticResource EyebrowText}" Margin="0,0,0,6"/>
-                        <ComboBox x:Name="MoveSnapCombo" Style="{StaticResource Dropdown}" Margin="0,0,0,14"/>
+                        <TextBlock Text="MIN SPLIT BLOCK SIZE (MIN)" Style="{StaticResource EyebrowText}" Margin="0,0,0,6"/>
+                        <TextBlock Text="Adding a block that spans existing ones splits around them — a gap this short or shorter is skipped rather than becoming its own sliver entry."
+                                   FontSize="10.5" Foreground="{DynamicResource TextFaint}" TextWrapping="Wrap" Margin="0,0,0,6"/>
+                        <ComboBox x:Name="MinSplitCombo" Style="{StaticResource Dropdown}" Margin="0,0,0,16"/>
 
-                        <TextBlock Text="MANUAL ADD MAX DURATION (MIN)" Style="{StaticResource EyebrowText}" Margin="0,0,0,6"/>
-                        <ComboBox x:Name="ManualMaxCombo" Style="{StaticResource Dropdown}" Margin="0,0,0,16"/>
-
+                        <!-- No manual "add duration" control either — a fresh add just defaults
+                             to 1 hour (or snaps sooner to butt against whatever's next), computed
+                             live by AddTimeDialog itself rather than a fixed configured number.
+                             See AddTimeDialog.SmartDefaultEnd. -->
                         <Border Height="1" Background="{DynamicResource Border}" Margin="0,0,0,16"/>
 
                         <!-- Merge sessions moved out to a toggle switch in the chart's own

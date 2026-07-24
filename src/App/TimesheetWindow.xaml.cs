@@ -119,10 +119,17 @@ public partial class TimesheetWindow : Window
     /// would silently wipe it out from under the user before they can click either button.</summary>
     private bool _confirmingDelete;
 
+    /// <summary>True while the calendar view's drag-to-add gesture (empty-space click-drag, as
+    /// opposed to _drag's move/resize of an EXISTING block) is in progress — same rationale as
+    /// _drag/_confirmingDelete: the highlight rectangle it draws is a plain child of this
+    /// render's canvas, so an untracked rebuild mid-drag would tear it out from under the mouse
+    /// capture. See BuildCalendar's own drag-to-add section for the actual gesture.</summary>
+    private bool _addDragging;
+
     /// <summary>Whether an interactive, in-progress calendar-view gesture owns the canvas right
     /// now — the shared guard against the once-a-second/resize/state-change auto-rebuilds
-    /// tearing it out from under the user (see _drag, _confirmingDelete).</summary>
-    private bool SuspendRerender => _drag is not null || _confirmingDelete;
+    /// tearing it out from under the user (see _drag, _confirmingDelete, _addDragging).</summary>
+    private bool SuspendRerender => _drag is not null || _confirmingDelete || _addDragging;
 
     public TimesheetWindow()
     {
@@ -149,6 +156,11 @@ public partial class TimesheetWindow : Window
         SourceInitialized += (_, _) =>
             DarkTitleBar.Apply(new WindowInteropHelper(this).Handle, !A.IsLightTheme);
         PreviewKeyDown += Window_PreviewKeyDown;
+        // TimesheetSettingsPopup is StaysOpen="True" now (see its XAML remarks) — WPF no longer
+        // auto-closes it on deactivation the way a StaysOpen="False" popup would (e.g. opening
+        // AddTimeDialog, which owns this window, or Alt-Tabbing away), so that has to be done by
+        // hand too, on top of Window_PreviewMouseDown's own outside-click handling.
+        Deactivated += (_, _) => TimesheetSettingsPopup.IsOpen = false;
 
         // The window is reused (Hide/Show), not recreated, across opens — so it needs its own
         // live-update wiring rather than relying on a fresh instance to pick up new state.
@@ -168,9 +180,88 @@ public partial class TimesheetWindow : Window
 
     // Once a second: keep the still-running block's segment growing live. Cheap — reuses the
     // cached committed blocks and only recomputes today's aggregation, no disk I/O.
+    /// <summary>
+    /// Three fix attempts at the once-a-second cursor flicker this replaces (pre-setting the new
+    /// canvas's Cursor property; nudging the real OS cursor position; toggling
+    /// Mouse.OverrideCursor) all treated the symptom — WPF failing to repaint the cursor
+    /// immediately after a full rebuild — without touching the actual cause: a full rebuild
+    /// tearing down and recreating every element, including whichever one the mouse happens to be
+    /// sitting on, every single second. Nothing forces WPF to correctly and INSTANTLY resolve the
+    /// cursor for a brand new element occupying the same screen position an old, now-destroyed
+    /// one used to; there's always some gap. The actual fix is to stop rebuilding at all for the
+    /// common case: TryUpdateLiveCalendarInPlace mutates the SAME Border/Line elements a full
+    /// render already produced (see BuildCalendar's own _liveTick* remarks), so their identity —
+    /// and everything hit-testing/hover/cursor resolution hangs off that identity — never changes
+    /// in the first place. A full RenderCurrentWeek only remains as the fallback for whatever that
+    /// can't handle (switching views/weeks, not currently tracking, day rollover, ...).
+    /// </summary>
     private void OnTick()
     {
-        if (IsVisible && !SuspendRerender) RenderCurrentWeek(0);
+        if (!IsVisible || SuspendRerender) return;
+
+        // Nothing in EITHER view's display changes second-to-second unless today is actually part
+        // of the displayed week — the live session (if any) belongs to the current week by
+        // definition, and a past/future week's own total is static. Skipping entirely here (not
+        // even falling through to a full render) avoids reproducing this whole rework's own
+        // flicker bug for someone who happens to be hovering a block in a week that isn't the
+        // current one while a tick fires.
+        var today = DateTime.Today;
+        if (today < _weekStart || today >= _weekStart.AddDays(7)) return;
+
+        if (TryUpdateLiveCalendarInPlace(out double weekTotalHours))
+        {
+            WeekTotalText.Text = $"{weekTotalHours:0.0} h";
+            return;
+        }
+        RenderCurrentWeek(0);
+    }
+
+    /// <summary>Attempts the cheap, identity-preserving per-second update described on OnTick.
+    /// Returns false (meaning: fall back to a full RenderCurrentWeek) whenever there's nothing
+    /// valid to patch in place at all — not showing Calendar view, or neither a live block NOR a
+    /// now-line survived the last full render (only possible on the very first tick right after
+    /// switching into Calendar view, before that first render has run). Otherwise patches
+    /// whichever of the two actually apply: the now-line alone keeps advancing even with nothing
+    /// currently tracked; the live block additionally grows only while a session both IS running
+    /// and still belongs to the SAME day it was rendered against — a session that stopped, or
+    /// rolled past midnight, needs a real rebuild (to remove/reshape it) rather than a patch, so
+    /// that block's own case still falls back for those.</summary>
+    private bool TryUpdateLiveCalendarInPlace(out double weekTotalHours)
+    {
+        weekTotalHours = 0;
+        if (_viewMode != ViewMode.Calendar) return false;
+        if (_liveTickBlockElement is null && _liveTickNowLine is null) return false;
+
+        var now = DateTime.Now;
+
+        if (_liveTickBlockElement is not null)
+        {
+            if (!A.Tracker.IsRunning || A.Tracker.State.BlockStartUtc is not DateTime startUtc) return false;
+            var startLocal = startUtc.ToLocalTime();
+            if (now.Date != startLocal.Date) return false; // crossed midnight — needs a real re-layout, not a patch
+
+            double startH = startLocal.TimeOfDay.TotalHours;
+            double endH = now.TimeOfDay.TotalHours;
+            Canvas.SetTop(_liveTickBlockElement, startH * CalendarPxPerHour);
+            _liveTickBlockElement.Height = Math.Max(3, (endH - startH) * CalendarPxPerHour);
+            if (_liveTickTimeLabel is not null) _liveTickTimeLabel.Text = $"{startLocal:HH:mm}–{now:HH:mm}";
+        }
+
+        if (_liveTickNowLine is not null)
+        {
+            double nowY = now.TimeOfDay.TotalHours * CalendarPxPerHour;
+            _liveTickNowLine.Y1 = nowY;
+            _liveTickNowLine.Y2 = nowY;
+        }
+
+        // The header's week total still has to tick live regardless of which element(s) above
+        // actually got patched — same raw-seconds reasoning HoursOf/RenderCurrentWeek already
+        // use, so the number grows smoothly rather than in RenderCurrentWeek's own
+        // 0.1h-rounded jumps. Only actually live (not just rendered a moment ago) while IsRunning.
+        double weekTotal = GetWeekBlocks().Sum(b => b.DurationHours);
+        if (A.Tracker.IsRunning) weekTotal += A.Tracker.CurrentElapsedSeconds / 3600.0;
+        weekTotalHours = weekTotal;
+        return true;
     }
 
     private static DateTime StartOfWeek(DateTime d)
@@ -336,6 +427,10 @@ public partial class TimesheetWindow : Window
         ChartArea_MouseWheel(sender, e); // shares the same debounce/direction logic; sets e.Handled itself
     }
 
+    // NB: a left-edge/left-corner window resize visibly jitters here (right-edge/bottom-only
+    // resizing is smooth) — investigated and deliberately left alone for now rather than shipping
+    // a half-working mitigation. See notes/resize-jank-investigation.md (gitignored) for the root
+    // cause and the two candidate real fixes.
     private void ChartCard_SizeChanged(object sender, SizeChangedEventArgs e) { if (!SuspendRerender) RenderCurrentWeek(0); }
 
     /// <summary>Ctrl+scroll over the calendar view (see the PreviewMouseWheel hookup in
@@ -369,25 +464,72 @@ public partial class TimesheetWindow : Window
     // Settings, save, re-render if it affects the current render) rather than buffering into a
     // working copy for an explicit Save button; the popover has no Save/Cancel of its own.
 
-    private static readonly int[] EdgeSnapOptions = { 5, 10, 15, 20, 30 };
-    private static readonly int[] MoveSnapOptions = { 1, 5, 10, 15 };
-    private static readonly int[] ManualMaxOptions = { 15, 30, 45, 60, 90 };
+    // Covers resize/move/drag-to-add alike now — see Settings.DragSnapMinutes.
+    private static readonly int[] DragSnapOptions = { 1, 5, 10, 15, 20, 30 };
+    private static readonly int[] MinSplitOptions = { 0, 1, 5, 10, 15, 30 };
     // The presets aren't evenly spaced (fine-grained near zero, coarser further out) — see
     // DensitySliderStyle in the XAML, an index-based slider rather than a continuous range.
     private static readonly double[] DensityPresets = { 0, 0.05, 0.1, 0.25, 0.5, 1, 2 };
 
     private ToggleSwitch _mergeSessionsToggle = null!;
 
+    // Two earlier attempts at "click the gear button while open closes it, doesn't reopen it"
+    // both assumed WPF's own StaysOpen="False" light-dismiss and the button's Click could be
+    // reasoned about in a fixed order (dismiss-then-Click, so read/snapshot IsOpen before the
+    // dismiss / cooldown after it) — in practice that ordering wasn't reliable enough to fix it
+    // either way. The Popup is now StaysOpen="True" instead (see its XAML remarks), which removes
+    // WPF's own dismiss from the picture entirely: Window_PreviewMouseDown below is the ONLY
+    // thing that ever closes it from an outside click, and it explicitly ignores clicks on the
+    // gear button itself, so there's no longer two independent pieces of code racing to decide
+    // the same click. Click, below, goes back to a plain, un-raced toggle.
     private void TimesheetSettings_Click(object sender, RoutedEventArgs e)
         => TimesheetSettingsPopup.IsOpen = !TimesheetSettingsPopup.IsOpen;
+
+    /// <summary>Closes the popover on a click anywhere outside it — see the XAML remarks on
+    /// TimesheetSettingsPopup for why this replaces StaysOpen="False" rather than the popup
+    /// handling it natively. Skips two kinds of click: the gear button itself (so THAT click's
+    /// own Click event, above, is the only thing that decides what happens to it — otherwise this
+    /// would close it out from under the button on mouse-down, and Click would immediately reopen
+    /// it on mouse-up, reintroducing the exact race this is meant to avoid) and anything inside
+    /// the popover's OWN content (its combo boxes, toggle, slider, ...) — despite living in what
+    /// LOOKS like a separate floating surface, a Popup's content is still reachable by the owning
+    /// Window's tunnelling Preview events, so without this second check, clicking anything inside
+    /// the popover closed it before its own click (e.g. opening a ComboBox's dropdown) ever ran.</summary>
+    private void Window_PreviewMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (!TimesheetSettingsPopup.IsOpen) return;
+        if (e.OriginalSource is DependencyObject src)
+        {
+            if (IsDescendantOf(src, TimesheetSettingsBtn)) return;
+            if (TimesheetSettingsPopup.Child is DependencyObject content && IsDescendantOf(src, content)) return;
+        }
+        TimesheetSettingsPopup.IsOpen = false;
+    }
+
+    private static bool IsDescendantOf(DependencyObject element, DependencyObject ancestor)
+    {
+        for (DependencyObject? cur = element; cur is not null; cur = GetVisualOrLogicalParent(cur))
+            if (ReferenceEquals(cur, ancestor)) return true;
+        return false;
+    }
+
+    /// <summary>Visual-tree parent when there is one, falling back to the LOGICAL parent when the
+    /// visual walk dead-ends — which happens at a Popup boundary (e.g. a ComboBox's own dropdown
+    /// list is itself a nested Popup, so VisualTreeHelper stops right there). A generated
+    /// ComboBoxItem's logical parent is still the ComboBox that produced it, though, so falling
+    /// back keeps the walk going back up through it — otherwise clicking an item in one of this
+    /// popover's own combo dropdowns read as "outside" everything and closed the popover before
+    /// the selection could even land.</summary>
+    private static DependencyObject? GetVisualOrLogicalParent(DependencyObject d)
+        => (d is Visual or System.Windows.Media.Media3D.Visual3D ? VisualTreeHelper.GetParent(d) : null)
+           ?? LogicalTreeHelper.GetParent(d);
 
     private void InitTimesheetSettingsPopover()
     {
         var s = A.Settings;
 
-        PopulateSnapCombo(EdgeSnapCombo, EdgeSnapOptions, s.EdgeSnapMinutes, v => A.Settings.EdgeSnapMinutes = v);
-        PopulateSnapCombo(MoveSnapCombo, MoveSnapOptions, s.MoveSnapMinutes, v => A.Settings.MoveSnapMinutes = v);
-        PopulateSnapCombo(ManualMaxCombo, ManualMaxOptions, s.ManualBlockMaxMinutes, v => A.Settings.ManualBlockMaxMinutes = v);
+        PopulateSnapCombo(DragSnapCombo, DragSnapOptions, s.DragSnapMinutes, v => A.Settings.DragSnapMinutes = v);
+        PopulateSnapCombo(MinSplitCombo, MinSplitOptions, s.MinSplitBlockMinutes, v => A.Settings.MinSplitBlockMinutes = v);
 
         _mergeSessionsToggle = new ToggleSwitch(s.ChartMergeAllSessions,
             tooltip: "Merge every session for a project into one bar.\nOff: only back-to-back sessions with a matching note merge — the same project touched again later gets its own bar.");
@@ -826,11 +968,23 @@ public partial class TimesheetWindow : Window
             var segments = BuildDaySegments(byDay[day], otherFill: faintBrush,
                 liveBlock: day == today ? liveBlock : null);
 
-            double yCursor = plotH;
             const double segGap = 2; // a small gap between stacked segments reads less "blocky"
+            // The day's OVERALL stack (bars + gaps together) has to land exactly where its total
+            // hours says it should on the axis — otherwise splitting the same total across MORE
+            // segments visibly (and wrongly) grows the stack taller purely from the fixed per-gap
+            // overhead piling up, so a day chopped into many small segments reaches further up
+            // the scale than an equal-hours day with only one or two. Gaps are carved OUT of the
+            // segments' own share of that height instead of being added on top of it — with a
+            // single segment (no gaps) this reduces to exactly the old seg.Hours/axisMax*plotH.
+            double dayTotalHours = segments.Sum(s => s.Hours);
+            double idealStackH = dayTotalHours / axisMax * plotH;
+            double gapTotal = Math.Max(0, segments.Count - 1) * segGap;
+            double availableForBars = Math.Max(0, idealStackH - gapTotal);
+
+            double yCursor = plotH;
             foreach (var seg0 in segments)
             {
-                double segH = Math.Max(2, seg0.Hours / axisMax * plotH);
+                double segH = dayTotalHours > 0 ? Math.Max(2, seg0.Hours / dayTotalHours * availableForBars) : 2;
                 var baseColor = ((SolidColorBrush)seg0.Fill).Color;
 
                 var seg = new Border
@@ -991,9 +1145,33 @@ public partial class TimesheetWindow : Window
     private const double MinCalendarPxPerHour = 24;
     private const double MaxCalendarPxPerHour = 160;
 
+    // ==================== once-a-second live update, without a full rebuild ====================
+    // References into the LAST full BuildCalendar render's own live-block Border/label and "now"
+    // line — captured there (and reset to null at the top of every BuildCalendar call, so a stale
+    // reference never survives past the render it came from) purely so OnTick can mutate their
+    // Height/Top/Text/Y in place instead of tearing down and rebuilding the whole canvas every
+    // second. That full rebuild used to be the ONLY way the live block grew, but replacing every
+    // element every tick — including the one the mouse happens to be sitting on — meant the
+    // cursor (and hover-fade state) briefly had nothing to resolve against each time, reading as
+    // a flicker in lock-step with the tick. Mutating the SAME elements in place never changes
+    // their identity, so hit-testing/hover/cursor are never disturbed at all. See
+    // TryUpdateLiveCalendarInPlace, and OnTick, which prefers it over RenderCurrentWeek whenever
+    // there's something valid to patch.
+    private Border? _liveTickBlockElement;
+    private TextBlock? _liveTickTimeLabel;
+    private Line? _liveTickNowLine;
+
     private FrameworkElement BuildCalendar(Dictionary<DateTime, List<TimeBlock>> byDay, TimeBlock? liveBlock,
         double width, double height, DateTime today)
     {
+        // Reset here, unconditionally — repopulated below only if THIS render actually produces a
+        // live block/now-line; a stale reference from a previous render (e.g. after navigating
+        // away from today's week, or the session stopping) must never survive to be mutated by a
+        // later OnTick as if it were still valid.
+        _liveTickBlockElement = null;
+        _liveTickTimeLabel = null;
+        _liveTickNowLine = null;
+
         const double yAxisW = 40;
         const double xAxisH = 32; // matches BuildChart's day-label strip height
         double plotW = Math.Max(80, width - yAxisW);
@@ -1046,6 +1224,15 @@ public partial class TimesheetWindow : Window
                 break;
             }
         }
+
+        // Same rationale as mouseInOldCanvas's own remarks just above (and reusing its result) —
+        // the drag-to-add hover cursor (see canvas.MouseMove further down) is only (re)applied by
+        // an event handler that fires on an actual mouse MOVE, so without this, the once-a-second
+        // live-tick rebuild — which replaces this Canvas outright — visibly flashed the cursor
+        // back to the default arrow every second, in lockstep with the live pulse, until the
+        // mouse so much as twitched enough to re-trigger MouseMove. Blocks/grips still win the
+        // hit-test the moment they exist below, exactly like that live handler already relies on.
+        canvas.Cursor = mouseInOldCanvas is { } mpForCursor && mpForCursor.X >= yAxisW ? CustomCursors.SmallPlus : Cursors.Arrow;
 
         // Fixed day-of-week/date strip, pinned at the bottom of the view instead of living at the
         // bottom of the SCROLLING hour grid (gridHeight is typically ~1000px+ — that meant
@@ -1249,6 +1436,9 @@ public partial class TimesheetWindow : Window
                 // whether there's room for text — a 5-minute sliver is still draggable, just
                 // unlabelled.
                 var content = new Grid();
+                // Captured (when isLive) so OnTick's per-second in-place update can rewrite this
+                // text directly instead of triggering a full rebuild — see _liveTickTimeLabel.
+                TextBlock? timeLabel = null;
                 if (segH >= 16 && resolved is not null)
                 {
                     var ink = new SolidColorBrush(SystemAccent.ReadableInk(baseColor));
@@ -1260,9 +1450,21 @@ public partial class TimesheetWindow : Window
                     });
                     if (segH >= 34)
                     {
-                        labels.Children.Add(new TextBlock
+                        timeLabel = new TextBlock
                         {
                             Text = $"{b.StartLocal:HH:mm}–{b.EndLocal:HH:mm}", FontSize = 9, Foreground = ink, Opacity = 0.85,
+                            TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 1, 0, 0),
+                        };
+                        labels.Children.Add(timeLabel);
+                    }
+                    // The note, once there's room for a third line — faded to 50% (on top of the
+                    // time label's own 0.85, so it reads as clearly secondary to it) rather than
+                    // full-strength, since it's supplementary detail, not the primary label.
+                    if (segH >= 50 && !string.IsNullOrWhiteSpace(b.Notes))
+                    {
+                        labels.Children.Add(new TextBlock
+                        {
+                            Text = b.Notes, FontSize = 9, Foreground = ink, Opacity = 0.5,
                             TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 1, 0, 0),
                         });
                     }
@@ -1308,7 +1510,11 @@ public partial class TimesheetWindow : Window
                 bool draggable = !isLive && !spansMidnight;
                 bool showGrips = draggable && segH >= MinHeightForGrips;
                 Border? topGrip = null, botGrip = null;
-                if (draggable) block.Cursor = Cursors.SizeAll;
+                // Non-draggable blocks (live, or the rare one spanning past midnight) still get
+                // their own explicit Arrow — without it, hovering one would fall through to the
+                // canvas's own crosshair (see the drag-to-add hover cursor further down),
+                // misleadingly suggesting you could add right where something already is.
+                block.Cursor = draggable ? Cursors.SizeAll : Cursors.Arrow;
 
                 // See mouseInOldCanvas above — if the cursor's already resting where this block
                 // is about to land, show its hover affordances (grips, delete ✕) immediately (no
@@ -1339,6 +1545,11 @@ public partial class TimesheetWindow : Window
                 canvas.Children.Add(block);
                 allDayBlockElements.Add((b, block));
                 if (draggable) draggableDayBlockElements.Add((b, block, showGrips));
+                if (isLive)
+                {
+                    _liveTickBlockElement = block;
+                    _liveTickTimeLabel = timeLabel;
+                }
 
                 if (topGrip is not null && botGrip is not null)
                     WireGripHoverFade(block, topGrip, botGrip);
@@ -1451,18 +1662,19 @@ public partial class TimesheetWindow : Window
         // displayed week actually includes today (a past/future week has no "now" to mark). Full
         // width, not just today's column, matching how the hour gridlines already span the whole
         // grid — it's a horizontal ruler for "this Y = now" rather than a today-specific marker
-        // (the accent-tinted column highlight above already covers that). Added last, after
-        // every block, so it draws on top of them. No timer of its own: recomputed fresh on every
-        // render, so it advances for free on the same once-a-second rebuild that already keeps a
-        // live block growing.
+        // (the accent-tinted column highlight above already covers that). Added last, after every
+        // block, so it draws on top of them. Captured into _liveTickNowLine so OnTick can slide it
+        // down in place once a second rather than triggering a full rebuild just to move a line.
         if (days.Contains(today))
         {
             double nowY = DateTime.Now.TimeOfDay.TotalHours * CalendarPxPerHour;
-            canvas.Children.Add(new Line
+            var nowLine = new Line
             {
                 X1 = yAxisW, X2 = width, Y1 = nowY, Y2 = nowY,
                 Stroke = accentBrush, StrokeThickness = 1.5, SnapsToDevicePixels = true,
-            });
+            };
+            canvas.Children.Add(nowLine);
+            _liveTickNowLine = nowLine;
         }
 
         // ==================== drag interaction (edge-resize / whole-block move) ====================
@@ -1509,6 +1721,32 @@ public partial class TimesheetWindow : Window
         double YToMinutes(double y) => y / CalendarPxPerHour * 60.0;
         double MinutesToY(double minutes) => minutes / 60.0 * CalendarPxPerHour;
         double SnapTo(double rawMinutes, int step) => Math.Round(rawMinutes / step) * (double)step;
+
+        // ==================== drag-to-add (empty space) ====================
+        // A click-drag on blank grid space (as opposed to _drag above, which moves/resizes an
+        // EXISTING block) draws a highlight between the anchor point and wherever the mouse
+        // currently is — up OR down from the anchor, whichever the user drags — and releasing it
+        // opens AddTimeDialog pre-filled to that span. Guarded by _addDragging (see its remarks)
+        // so the once-a-second live-tick rebuild can't tear the highlight out mid-drag. State is
+        // plain local closures, not instance fields, the same way openConfirm/_confirmingDelete
+        // split their own state above — the bool guard alone is enough to survive across
+        // MouseMove/MouseUp, since nothing rebuilds this canvas while it's true.
+        Border? addHighlight = null;
+        TextBlock? addLabel = null;
+        double addAnchorY = 0;
+        DateTime addDay = today;
+
+        // Snaps both edges to the configured drag-snap grid (same one block-resize/move uses),
+        // then guarantees a non-zero span by nudging the end forward a step if it ever rounds
+        // down onto the start — a live preview during a short drag should never show "12:00–12:00".
+        (TimeSpan Start, TimeSpan End) SnappedAddRange(double yTop, double yBottom)
+        {
+            int snap = Math.Max(1, A.Settings.DragSnapMinutes);
+            double startMinutes = Clamp(SnapTo(YToMinutes(yTop), snap), 0, 24 * 60 - snap);
+            double endMinutes = Clamp(SnapTo(YToMinutes(yBottom), snap), snap, 24 * 60);
+            if (endMinutes <= startMinutes) endMinutes = Math.Min(24 * 60, startMinutes + snap);
+            return (TimeSpan.FromMinutes(startMinutes), TimeSpan.FromMinutes(endMinutes));
+        }
 
         // Final safety net, checked once at commit time against EVERY other block that day (not
         // just the one immediate neighbour the live clamp bounds were computed from) — belt and
@@ -1620,12 +1858,55 @@ public partial class TimesheetWindow : Window
 
         canvas.MouseMove += (_, e) =>
         {
-            if (_drag is not { } d) return;
+            if (_addDragging && addHighlight is not null)
+            {
+                double curY = Clamp(e.GetPosition(canvas).Y, 0, gridHeight);
+                double rawTop = Math.Min(addAnchorY, curY);
+                double rawBottom = Math.Max(addAnchorY, curY);
+
+                // Snap the RECTANGLE itself to the same grid the preview time text already
+                // reflects — previously only the label snapped while the box tracked the raw
+                // pixel position, so the two visibly disagreed (box looked continuous, times
+                // jumped). Mirrors how the resize/move handlers snap their own live geometry.
+                var (previewStart, previewEnd) = SnappedAddRange(rawTop, rawBottom);
+                double snappedTop = MinutesToY(previewStart.TotalMinutes);
+                double snappedBottom = MinutesToY(previewEnd.TotalMinutes);
+                Canvas.SetTop(addHighlight, snappedTop);
+                addHighlight.Height = Math.Max(1, snappedBottom - snappedTop);
+
+                if (addLabel is not null)
+                {
+                    // The hour count only joins the time range once there's comfortably enough
+                    // room for it — same "don't cram a second piece of info onto a sliver"
+                    // reasoning BuildChart/BuildCalendar's own block labels already follow
+                    // (compare their own ASN/time second-line thresholds).
+                    string timeText = $"{addDay + previewStart:HH:mm}–{addDay + previewEnd:HH:mm}";
+                    const double HoursLabelMinHeight = 34; // needs room for a second line, not just wider text
+                    addLabel.Text = addHighlight.Height >= HoursLabelMinHeight
+                        ? $"{timeText}\n{(previewEnd - previewStart).TotalHours:0.0}h"
+                        : timeText;
+                    addLabel.Visibility = addHighlight.Height >= 16 ? Visibility.Visible : Visibility.Collapsed;
+                }
+                return;
+            }
+
+            if (_drag is not { } d)
+            {
+                // Hover-only affordance: a small "+" (see CustomCursors — deliberately smaller
+                // than the stock Cursors.Cross, and distinct from the resize grips' SizeNS so the
+                // two gestures don't look identical) invites the drag-to-add gesture above over
+                // blank grid space; the axis strip gets the plain arrow back since clicking there
+                // does nothing. Blocks/grips/etc. override this with their OWN Cursor (the nearer
+                // element wins hit-testing), so this only ever actually shows where there's
+                // genuinely nothing else to interact with yet.
+                canvas.Cursor = e.GetPosition(canvas).X < yAxisW ? Cursors.Arrow : CustomCursors.SmallPlus;
+                return;
+            }
             double deltaY = e.GetPosition(canvas).Y - d.StartMouseY;
 
             if (d.IsResize)
             {
-                int snap = Math.Max(1, A.Settings.EdgeSnapMinutes);
+                int snap = Math.Max(1, A.Settings.DragSnapMinutes);
                 if (d.ResizeTop)
                 {
                     double newTop = Clamp(MinutesToY(SnapTo(YToMinutes(d.OrigTop + deltaY), snap)), d.LowBound, d.HighBound);
@@ -1666,7 +1947,7 @@ public partial class TimesheetWindow : Window
             }
             else
             {
-                int snap = Math.Max(1, A.Settings.MoveSnapMinutes);
+                int snap = Math.Max(1, A.Settings.DragSnapMinutes);
                 double newTop = Clamp(MinutesToY(SnapTo(YToMinutes(d.OrigTop + deltaY), snap)), d.LowBound, d.HighBound);
                 Canvas.SetTop(d.Element, newTop);
 
@@ -1684,6 +1965,27 @@ public partial class TimesheetWindow : Window
 
         canvas.MouseLeftButtonUp += (_, e) =>
         {
+            if (_addDragging)
+            {
+                canvas.ReleaseMouseCapture();
+                _addDragging = false;
+                if (addHighlight is not null) canvas.Children.Remove(addHighlight);
+
+                // A near-zero-movement press/release is a stray click, not a drag — same
+                // click-vs-drag distinction the block-move handler below makes for itself.
+                const double AddClickThresholdPx = 3;
+                double releaseY = Clamp(e.GetPosition(canvas).Y, 0, gridHeight);
+                if (Math.Abs(releaseY - addAnchorY) < AddClickThresholdPx) return;
+
+                var (rangeStart, rangeEnd) = SnappedAddRange(Math.Min(addAnchorY, releaseY), Math.Max(addAnchorY, releaseY));
+                var (clippedStart, clippedEnd) = AddTimeDialog.ClipDragToEdges(addDay, rangeStart, rangeEnd);
+                if (clippedEnd <= clippedStart) return; // fully swallowed by one existing block — nothing left to add
+
+                bool added = AddTimeDialog.AskAtTime(this, addDay, clippedStart, clippedEnd);
+                if (added) { _cachedWeekStart = null; RenderCurrentWeek(0); }
+                return;
+            }
+
             if (_drag is not { } d) { canvas.ReleaseMouseCapture(); return; }
             canvas.ReleaseMouseCapture();
 
@@ -1754,8 +2056,12 @@ public partial class TimesheetWindow : Window
             RenderCurrentWeek(0); // one authoritative re-render, reconciling with what's now on disk
         };
 
-        // Double-click on blank grid space (not the axis strip, the day-label row, or on top of
-        // an existing block) opens AddTimeDialog pre-filled to that day/time — see AskAtTime.
+        // Blank grid space (not the axis strip, the day-label row, or on top of an existing
+        // block) supports two ways to add a new block: double-click opens AddTimeDialog pre-
+        // filled to that day/time with a computed default end (see AskAtTime/SmartDefaultEnd);
+        // a single press-drag instead draws a highlight and opens the dialog pre-filled to the
+        // dragged span (see the drag-to-add section above, and its MouseMove/MouseLeftButtonUp
+        // handling further up this method).
         canvas.Background = Brushes.Transparent; // otherwise empty space isn't hit-test visible at all
         canvas.MouseLeftButtonDown += (_, e) =>
         {
@@ -1763,8 +2069,8 @@ public partial class TimesheetWindow : Window
             // instead landed on a block/grip/✕/button already had e.Handled set true upstream
             // and never reaches this bubbled handler at all.
             if (openConfirm is not null) CloseConfirm();
+            if (_drag is not null) return; // shouldn't happen (blocks capture their own down), but be safe
 
-            if (e.ClickCount != 2) return;
             var pos = e.GetPosition(canvas);
             if (pos.X < yAxisW) return; // hour-label axis strip
             if (blockRects.Any(r => r.Contains(pos))) return; // on an existing block, not blank space
@@ -1773,23 +2079,50 @@ public partial class TimesheetWindow : Window
             if (dayIndex < 0 || dayIndex >= days.Count) return;
             var clickedDay = days[dayIndex];
 
-            double clickedMinutes = pos.Y / CalendarPxPerHour * 60;
-            double snappedMinutes = Clamp(Math.Round(clickedMinutes / 30.0) * 30.0, 0, 24 * 60 - 30);
-            var start = TimeSpan.FromMinutes(snappedMinutes);
+            if (e.ClickCount == 2)
+            {
+                double clickedMinutes = pos.Y / CalendarPxPerHour * 60;
+                double snappedMinutes = Clamp(Math.Round(clickedMinutes / 30.0) * 30.0, 0, 24 * 60 - 30);
+                e.Handled = true;
+                bool added = AddTimeDialog.AskAtTime(this, clickedDay, TimeSpan.FromMinutes(snappedMinutes));
+                if (added) { _cachedWeekStart = null; RenderCurrentWeek(0); }
+                return;
+            }
 
-            // Capped at the max manual duration, or the next committed block that day, whichever
-            // comes first — AddTimeDialog re-validates against live blocks/overlaps regardless,
-            // this is just a sensible starting fill.
-            var nextStart = byDay.TryGetValue(clickedDay, out var dayBlocks)
-                ? dayBlocks.Where(b => b.StartLocal.Date == clickedDay && b.StartLocal.TimeOfDay > start)
-                    .Select(b => b.StartLocal.TimeOfDay).DefaultIfEmpty(TimeSpan.FromHours(24)).Min()
-                : TimeSpan.FromHours(24);
-            var maxEnd = start + TimeSpan.FromMinutes(Math.Max(1, A.Settings.ManualBlockMaxMinutes));
-            var end = maxEnd < nextStart ? maxEnd : nextStart;
-
+            // Single press — start tracking a potential drag-to-add. Whether this ends up as a
+            // genuine drag or just a stray click (including the first half of what's about to
+            // become a double-click) is only known at MouseUp — see its own click-vs-drag
+            // threshold check.
             e.Handled = true;
-            bool added = AddTimeDialog.AskAtTime(this, clickedDay, start, end);
-            if (added) { _cachedWeekStart = null; RenderCurrentWeek(0); }
+            canvas.CaptureMouse();
+            _addDragging = true;
+            addDay = clickedDay;
+            addAnchorY = pos.Y;
+
+            double cxForAdd = yAxisW + dayW * dayIndex + dayW / 2;
+            addLabel = new TextBlock
+            {
+                FontSize = 10.5, FontWeight = FontWeights.SemiBold, Foreground = Brushes.White,
+                FontFamily = monoFont, IsHitTestVisible = false,
+                HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+                TextAlignment = TextAlignment.Center, // centres the shorter "2.1h" line under the time range
+                Visibility = Visibility.Collapsed,
+                Effect = new System.Windows.Media.Effects.DropShadowEffect
+                { BlurRadius = 3, ShadowDepth = 0, Opacity = 0.6, Color = Colors.Black },
+            };
+            var ac = ((SolidColorBrush)accentBrush).Color;
+            addHighlight = new Border
+            {
+                Width = barW, Height = 1,
+                Background = new SolidColorBrush(Color.FromArgb(70, ac.R, ac.G, ac.B)),
+                BorderBrush = accentBrush, BorderThickness = new Thickness(1.5),
+                CornerRadius = new CornerRadius(4), IsHitTestVisible = false, ClipToBounds = true,
+                Child = addLabel,
+            };
+            Canvas.SetLeft(addHighlight, cxForAdd - barW / 2);
+            Canvas.SetTop(addHighlight, pos.Y);
+            Canvas.SetZIndex(addHighlight, 500);
+            canvas.Children.Add(addHighlight);
         };
 
         var scroll = new ScrollViewer
