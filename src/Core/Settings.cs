@@ -83,24 +83,19 @@ public sealed class Settings
     public string DefaultTimesheetView { get; set; } = "Bar";
 
     /// <summary>
-    /// Calendar-view drag-to-resize: dragging a block's top/bottom edge snaps to the nearest
-    /// this-many minutes. Purely an editing aid — has no effect on the bar view or anything
-    /// already recorded.
+    /// Calendar-view dragging snaps to the nearest this-many minutes — covers resizing a block's
+    /// top/bottom edge, moving a whole block, and drawing a new one via drag-to-add, all with the
+    /// one shared granularity rather than each having its own. Purely an editing aid — has no
+    /// effect on the bar view or anything already recorded.
     /// </summary>
-    public int EdgeSnapMinutes { get; set; } = 10;
+    public int DragSnapMinutes { get; set; } = 5;
 
     /// <summary>
-    /// Calendar-view drag-to-move: dragging a whole block snaps its start time to the nearest
-    /// this-many minutes (duration is preserved). Finer than <see cref="EdgeSnapMinutes"/> by
-    /// default since repositioning a whole block is a smaller, more precise adjustment than
-    /// stretching one edge of it.
+    /// When a Times-mode add cleanly spans one or more whole existing blocks (see
+    /// AddTimeDialog.TryParseTimesMode), it's split into separate entries around them — but a gap
+    /// too short to bother with (e.g. two existing blocks a minute apart) is just absorbed rather
+    /// than becoming its own sliver row. This is that "too short" threshold, in minutes. 0 turns
+    /// it off — every non-zero gap becomes its own entry.
     /// </summary>
-    public int MoveSnapMinutes { get; set; } = 5;
-
-    /// <summary>
-    /// Manual "add time by amount" defaults to this many minutes, and it's also the cap on how
-    /// far a calendar double-click-to-add reaches past the clicked time (never past the start of
-    /// the next existing block that day).
-    /// </summary>
-    public int ManualBlockMaxMinutes { get; set; } = 30;
+    public int MinSplitBlockMinutes { get; set; } = 5;
 }
