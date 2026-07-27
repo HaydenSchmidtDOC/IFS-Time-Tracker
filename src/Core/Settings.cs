@@ -107,4 +107,29 @@ public sealed class Settings
     /// crash mid-tour can never cause it to re-nag on the next launch. The Settings window's own
     /// "Start tutorial" button re-runs the tour on demand regardless of this flag.</summary>
     public bool OnboardingPromptShown { get; set; } = false;
+
+    /// <summary>
+    /// Which theme the app is skinned with: "Light", "Dark", "System" (follow Windows'
+    /// light/dark setting live), or "Custom" (one of the bundled full-palette themes named by
+    /// <see cref="CustomThemeName"/>). Defaults to "System" so installs from before this setting
+    /// existed keep behaving exactly as they always did.
+    /// </summary>
+    public string ThemeMode { get; set; } = "System";
+
+    /// <summary>
+    /// Where the app's accent colour (highlights, primary buttons, selected state) comes from:
+    /// "System" (the live Windows accent colour, as before) or "Custom" (
+    /// <see cref="CustomAccentColor"/>, picked via the hue slider in Settings). Ignored when
+    /// <see cref="ThemeMode"/> is "Custom" — those bundled themes carry their own accent.
+    /// </summary>
+    public string AccentMode { get; set; } = "System";
+
+    /// <summary>The user's own accent colour, as hex, used when <see cref="AccentMode"/> is
+    /// "Custom". Kept around even while AccentMode is "System" so switching back to Custom
+    /// restores whatever hue was last picked, same as a project's colour never resets itself.</summary>
+    public string CustomAccentColor { get; set; } = "#2D6B8F";
+
+    /// <summary>Which bundled full-palette theme is active when <see cref="ThemeMode"/> is
+    /// "Custom": "Nightshade", "Terminal", or "Sunset".</summary>
+    public string CustomThemeName { get; set; } = "Nightshade";
 }

@@ -1,0 +1,18 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- Custom theme: deep violet ground, every surface/border tinted toward purple rather than
+         neutral grey, magenta-purple accent. Same key set as Light.xaml/Dark.xaml. -->
+    <SolidColorBrush x:Key="Bg"           Color="#120D1B"/>
+    <SolidColorBrush x:Key="Surface"      Color="#1E1730"/>
+    <SolidColorBrush x:Key="Surface2"     Color="#271E3D"/>
+    <SolidColorBrush x:Key="Surface3"     Color="#322847"/>
+    <SolidColorBrush x:Key="Border"       Color="#3B2E52"/>
+    <SolidColorBrush x:Key="BorderStrong" Color="#4F3E6B"/>
+    <SolidColorBrush x:Key="Text"         Color="#F1E9FB"/>
+    <SolidColorBrush x:Key="TextDim"      Color="#B6A2D4"/>
+    <SolidColorBrush x:Key="TextFaint"    Color="#7C6A98"/>
+    <SolidColorBrush x:Key="Accent"       Color="#C158DC"/>
+    <SolidColorBrush x:Key="AccentInk"    Color="#FFFFFF"/>
+    <SolidColorBrush x:Key="Live"         Color="#FF5C7A"/>
+    <Color x:Key="AccentColor">#C158DC</Color>
+</ResourceDictionary>

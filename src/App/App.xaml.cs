@@ -74,17 +74,6 @@ public partial class App : Application
         // be called on it later (OnExit), or it throws on this duplicate-launch path.
         if (!isNew) { Shutdown(); return; }
 
-        ApplyTheme();
-        ApplySystemAccent();
-        // Windows raises this (via a dedicated message-only window SystemEvents owns) whenever
-        // theme/accent settings change in Settings > Personalization — General covers light/dark
-        // mode, Color covers the accent colour. Re-running the same two Apply* calls used at
-        // startup is enough to re-skin the whole app live: every themed colour in the app is a
-        // DynamicResource lookup (see ApplySystemAccent's remarks), and WPF's DynamicResource
-        // resolution already re-notifies every consumer on its own once the dictionaries backing
-        // it change — no per-window/per-control code needed here beyond that.
-        SystemEvents.UserPreferenceChanged += OnSystemUserPreferenceChanged;
-
         Paths = new AppPaths();
         Store = new JsonStore(Paths);
         Settings = Store.LoadSettings();
@@ -96,6 +85,19 @@ public partial class App : Application
                                               // not the bootstrap copy next to the exe that only
                                               // told us where to look
         }
+
+        // Needs Settings loaded first — ApplyTheme/ApplySystemAccent read ThemeMode/AccentMode
+        // to decide whether to honour the live OS setting at all or use a manual override.
+        ApplyTheme();
+        ApplySystemAccent();
+        // Windows raises this (via a dedicated message-only window SystemEvents owns) whenever
+        // theme/accent settings change in Settings > Personalization — General covers light/dark
+        // mode, Color covers the accent colour. Re-running the same two Apply* calls used at
+        // startup is enough to re-skin the whole app live: every themed colour in the app is a
+        // DynamicResource lookup (see ApplySystemAccent's remarks), and WPF's DynamicResource
+        // resolution already re-notifies every consumer on its own once the dictionaries backing
+        // it change — no per-window/per-control code needed here beyond that.
+        SystemEvents.UserPreferenceChanged += OnSystemUserPreferenceChanged;
         // Never let a settings combination leave the app with literally no visible surface —
         // no tray icon, no pill, and a hidden main window would be unrecoverable without killing
         // the process from Task Manager.
@@ -182,21 +184,45 @@ public partial class App : Application
     private ResourceDictionary? _themeDict;
     private ResourceDictionary? _accentDict;
 
+    /// <summary>Bundled custom themes that use a light base palette — every other name in
+    /// <see cref="Core.Settings.CustomThemeName"/> is dark. Custom themes don't share Light.xaml/
+    /// Dark.xaml's naming, so IsLightTheme (native chrome, e.g. DarkTitleBar) is looked up here
+    /// instead of inferred from the file name.</summary>
+    private static readonly HashSet<string> LightCustomThemes = new() { "Sunset" };
+
     private void ApplyTheme()
     {
-        bool light = true;
-        try
+        string mode = Settings.ThemeMode;
+        bool light;
+        string themeFile;
+
+        if (mode == "Light" || mode == "Dark")
         {
-            using var k = Registry.CurrentUser.OpenSubKey(
-                @"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
-            if (k?.GetValue("AppsUseLightTheme") is int v) light = v != 0;
+            light = mode == "Light";
+            themeFile = mode;
         }
-        catch { /* default light */ }
+        else if (mode == "Custom")
+        {
+            themeFile = string.IsNullOrWhiteSpace(Settings.CustomThemeName) ? "Nightshade" : Settings.CustomThemeName;
+            light = LightCustomThemes.Contains(themeFile);
+        }
+        else // "System" (also the fallback for any unrecognised/future value)
+        {
+            light = true;
+            try
+            {
+                using var k = Registry.CurrentUser.OpenSubKey(
+                    @"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
+                if (k?.GetValue("AppsUseLightTheme") is int v) light = v != 0;
+            }
+            catch { /* default light */ }
+            themeFile = light ? "Light" : "Dark";
+        }
         IsLightTheme = light;
 
         var dict = new ResourceDictionary
         {
-            Source = new Uri($"Themes/{(light ? "Light" : "Dark")}.xaml", UriKind.Relative)
+            Source = new Uri($"Themes/{themeFile}.xaml", UriKind.Relative)
         };
         if (_themeDict is not null) Resources.MergedDictionaries.Remove(_themeDict);
         Resources.MergedDictionaries.Insert(0, dict);
@@ -204,15 +230,34 @@ public partial class App : Application
     }
 
     /// <summary>
-    /// Override the theme's static Accent/AccentInk with the user's actual Windows accent
-    /// colour, if readable. Every "blue highlight" in the app (save buttons, the selected-
-    /// project border, pill toggle hover) is a DynamicResource lookup on these two keys, so
-    /// adding a dictionary on top of the theme is enough to re-skin all of them at once.
+    /// Override the theme's static Accent/AccentInk with either the live Windows accent colour
+    /// or the user's own custom-picked one, per Settings.AccentMode. Skipped entirely (and any
+    /// previous override removed) when ThemeMode is "Custom" — those bundled themes carry their
+    /// own Accent/AccentInk baked into the theme dictionary itself, so no override should sit on
+    /// top of it. Every "blue highlight" in the app (save buttons, the selected-project border,
+    /// pill toggle hover) is a DynamicResource lookup on these two keys, so adding a dictionary on
+    /// top of the theme is enough to re-skin all of them at once.
     /// </summary>
     private void ApplySystemAccent()
     {
-        if (!SystemAccent.TryGetAccentColor(out var accent)) return;
-        var ink = SystemAccent.ReadableInk(accent);
+        if (Settings.ThemeMode == "Custom")
+        {
+            if (_accentDict is not null) { Resources.MergedDictionaries.Remove(_accentDict); _accentDict = null; }
+            return;
+        }
+
+        Color accent, ink;
+        if (Settings.AccentMode == "Custom")
+        {
+            accent = ColorUtil.Parse(Settings.CustomAccentColor);
+            ink = SystemAccent.ReadableInk(accent);
+        }
+        else
+        {
+            if (!SystemAccent.TryGetAccentColor(out accent)) return;
+            ink = SystemAccent.ReadableInk(accent);
+        }
+
         var dict = new ResourceDictionary
         {
             { "Accent", new SolidColorBrush(accent) },
@@ -223,28 +268,34 @@ public partial class App : Application
         _accentDict = dict;
     }
 
+    /// <summary>Re-skins the whole app right now: reloads the theme dictionary and accent
+    /// override per current Settings, and refreshes every open window's native title-bar chrome
+    /// to match. Called both by the live OS-preference-changed handler below and by
+    /// SettingsWindow after Save, so a manual theme/accent change takes effect immediately, the
+    /// same way every other setting in that window does.</summary>
+    public void ApplyThemeAndAccent()
+    {
+        ApplyTheme();
+        ApplySystemAccent();
+        foreach (Window w in Windows)
+        {
+            if (!w.IsLoaded) continue;
+            try { DarkTitleBar.Apply(new WindowInteropHelper(w).Handle, !IsLightTheme); }
+            catch (InvalidOperationException) { /* handle not yet created — nothing to re-skin */ }
+        }
+        ThemeChanged?.Invoke();
+    }
+
     /// <summary>Re-skins the whole app the moment Windows' theme/accent colour actually changes,
     /// rather than only picking it up on the next launch. SystemEvents raises this off the UI
     /// thread (its own message-only window), so the actual work is marshalled back via
-    /// Dispatcher; the two Apply* calls are cheap (a handful of resource lookups), and open
-    /// windows using a borderless/no-native-chrome style don't need anything beyond that — except
-    /// the one DWM caption-colour attribute (DarkTitleBar), which isn't resource-driven and so is
-    /// explicitly refreshed for every currently-open window.</summary>
+    /// Dispatcher. ApplyTheme/ApplySystemAccent internally no-op their OS-driven half whenever the
+    /// user has manually overridden it (ThemeMode/AccentMode != "System"), so it's safe to
+    /// unconditionally re-run them here regardless of which mode is currently active.</summary>
     private void OnSystemUserPreferenceChanged(object? sender, UserPreferenceChangedEventArgs e)
     {
         if (e.Category != UserPreferenceCategory.General && e.Category != UserPreferenceCategory.Color) return;
-        Dispatcher.BeginInvoke(() =>
-        {
-            ApplyTheme();
-            ApplySystemAccent();
-            foreach (Window w in Windows)
-            {
-                if (!w.IsLoaded) continue;
-                try { DarkTitleBar.Apply(new WindowInteropHelper(w).Handle, !IsLightTheme); }
-                catch (InvalidOperationException) { /* handle not yet created — nothing to re-skin */ }
-            }
-            ThemeChanged?.Invoke();
-        });
+        Dispatcher.BeginInvoke(ApplyThemeAndAccent);
     }
 
     // ---------------- tray ----------------

@@ -15,6 +15,9 @@
     <Version>0.4.0</Version>
     <Product>IFS Time Tracker</Product>
     <Company>Daifuku Oceania</Company>
+    <Authors>Daifuku Oceania</Authors>
+    <Description>Desktop time tracker for logging hours against IFS project codes and ASNs.</Description>
+    <Copyright>Copyright © 2026 Daifuku Oceania</Copyright>
     <ApplicationIcon>Assets\time_tracker.ico</ApplicationIcon>
   </PropertyGroup>
 

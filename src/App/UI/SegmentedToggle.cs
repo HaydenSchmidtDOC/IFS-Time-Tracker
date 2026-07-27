@@ -7,11 +7,11 @@ using System.Windows.Media.Animation;
 namespace TimeTracker.App.UI;
 
 /// <summary>
-/// A small pill-shaped two-option toggle — e.g. "Totals / Calendar" or "Amount / Times" — with a
-/// sliding accent highlight that eases between the two segments instead of just snapping. Built
-/// as a plain class wrapping a hand-assembled visual tree (matching how the rest of this app
-/// builds one-off UI pieces in code, e.g. DayBlocksWindow's rows) rather than a templated Style,
-/// since every current use is exactly two fixed text segments.
+/// A small pill-shaped multi-option toggle — e.g. "Totals / Calendar", "Amount / Times", or a
+/// four-way "Light / Dark / System / Custom" — with a sliding accent highlight that eases
+/// between segments instead of just snapping. Built as a plain class wrapping a hand-assembled
+/// visual tree (matching how the rest of this app builds one-off UI pieces in code, e.g.
+/// DayBlocksWindow's rows) rather than a templated Style.
 /// </summary>
 public sealed class SegmentedToggle
 {
@@ -23,14 +23,25 @@ public sealed class SegmentedToggle
     /// <summary>Raised when the user picks a different segment (not raised by <see cref="SetIndex"/>).</summary>
     public event Action<int>? SelectionChanged;
 
+    private readonly int _count;
     private readonly Border _track;
     private readonly Border _highlight;
     private readonly TranslateTransform _highlightMove = new();
-    private readonly TextBlock _leftText;
-    private readonly TextBlock _rightText;
+    private readonly TextBlock[] _labels;
 
+    /// <summary>Two-option convenience overload — every use before the four-way theme-mode
+    /// toggle was exactly two fixed text segments (Amount/Times, Totals/Calendar), so this keeps
+    /// those call sites unchanged.</summary>
     public SegmentedToggle(string leftLabel, string rightLabel, int initialIndex = 0, double fontSize = 12)
+        : this(new[] { leftLabel, rightLabel }, initialIndex, fontSize)
     {
+    }
+
+    public SegmentedToggle(string[] labels, int initialIndex = 0, double fontSize = 12)
+    {
+        if (labels.Length < 2)
+            throw new ArgumentException("A segmented toggle needs at least two segments.", nameof(labels));
+        _count = labels.Length;
         SelectedIndex = initialIndex;
 
         var outer = new Grid { Height = 30, Cursor = Cursors.Hand, Background = Brushes.Transparent };
@@ -54,22 +65,26 @@ public sealed class SegmentedToggle
         _highlight.SetResourceReference(Border.BackgroundProperty, "Accent");
         outer.Children.Add(_highlight);
 
-        var labels = new Grid();
-        labels.ColumnDefinitions.Add(new ColumnDefinition());
-        labels.ColumnDefinitions.Add(new ColumnDefinition());
+        var labelsGrid = new Grid();
+        _labels = new TextBlock[_count];
+        for (int i = 0; i < _count; i++)
+        {
+            labelsGrid.ColumnDefinitions.Add(new ColumnDefinition());
+            _labels[i] = MakeLabel(labels[i], fontSize);
+            Grid.SetColumn(_labels[i], i);
+            labelsGrid.Children.Add(_labels[i]);
+        }
+        outer.Children.Add(labelsGrid);
 
-        _leftText = MakeLabel(leftLabel, fontSize);
-        _rightText = MakeLabel(rightLabel, fontSize);
-        Grid.SetColumn(_leftText, 0);
-        Grid.SetColumn(_rightText, 1);
-        labels.Children.Add(_leftText);
-        labels.Children.Add(_rightText);
-        outer.Children.Add(labels);
-
-        // One trigger for the whole pill, not "click whichever side you want" — with exactly two
-        // states this is a plain toggle switch, so a click anywhere (including on the side that's
-        // already active) flips it, rather than only reacting when the non-active label is hit.
-        outer.MouseLeftButtonUp += (_, _) => UserSelect(1 - SelectedIndex);
+        // A click anywhere in the pill jumps straight to whichever segment sits under the
+        // pointer (not just "the other one") — with exactly two segments that's identical to the
+        // old flip-on-any-click behaviour, so existing two-option uses see no change.
+        outer.MouseLeftButtonUp += (_, e) =>
+        {
+            double x = e.GetPosition(outer).X;
+            int index = Math.Clamp((int)(x / outer.ActualWidth * _count), 0, _count - 1);
+            UserSelect(index);
+        };
         outer.SizeChanged += (_, _) => Reposition(animate: false);
         outer.Loaded += (_, _) => Reposition(animate: false);
 
@@ -104,16 +119,16 @@ public sealed class SegmentedToggle
 
     private void ApplyColors()
     {
-        _leftText.SetResourceReference(TextBlock.ForegroundProperty, SelectedIndex == 0 ? "AccentInk" : "TextDim");
-        _rightText.SetResourceReference(TextBlock.ForegroundProperty, SelectedIndex == 1 ? "AccentInk" : "TextDim");
+        for (int i = 0; i < _count; i++)
+            _labels[i].SetResourceReference(TextBlock.ForegroundProperty, i == SelectedIndex ? "AccentInk" : "TextDim");
     }
 
     private void Reposition(bool animate)
     {
-        double half = _track.ActualWidth / 2;
-        if (half <= 0) return; // not laid out yet — Loaded/SizeChanged will call again once it is
-        _highlight.Width = Math.Max(0, half - 6); // minus the 3px margin on each side
-        double targetX = SelectedIndex == 1 ? half : 0;
+        double segment = _track.ActualWidth / _count;
+        if (segment <= 0) return; // not laid out yet — Loaded/SizeChanged will call again once it is
+        _highlight.Width = Math.Max(0, segment - 6); // minus the 3px margin on each side
+        double targetX = SelectedIndex * segment;
 
         // Read the CURRENT (possibly still-animating/held) position BEFORE detaching the
         // animation below — reading it after would return X's plain base value instead, which

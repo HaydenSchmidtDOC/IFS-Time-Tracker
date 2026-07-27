@@ -1,0 +1,25 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- Custom theme: an actual sunset-sky gradient behind the timesheet canvas (gold to coral
+         to deep salmon, top to bottom), with the rest of the palette saturated further toward
+         amber/orange rather than the paler cream/tan of the first pass. Same key set as
+         Light.xaml/Dark.xaml — Bg just happens to be a gradient brush instead of solid, which
+         DynamicResource-driven Background properties don't care about either way. -->
+    <LinearGradientBrush x:Key="Bg" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Color="#FFC873" Offset="0"/>
+        <GradientStop Color="#FF9D5C" Offset="0.55"/>
+        <GradientStop Color="#F2704F" Offset="1"/>
+    </LinearGradientBrush>
+    <SolidColorBrush x:Key="Surface"      Color="#FFF8EE"/>
+    <SolidColorBrush x:Key="Surface2"     Color="#FCE7CB"/>
+    <SolidColorBrush x:Key="Surface3"     Color="#F8D7AD"/>
+    <SolidColorBrush x:Key="Border"       Color="#EAB878"/>
+    <SolidColorBrush x:Key="BorderStrong" Color="#D89A55"/>
+    <SolidColorBrush x:Key="Text"         Color="#3A2418"/>
+    <SolidColorBrush x:Key="TextDim"      Color="#8C5A32"/>
+    <SolidColorBrush x:Key="TextFaint"    Color="#BD8656"/>
+    <SolidColorBrush x:Key="Accent"       Color="#E8642A"/>
+    <SolidColorBrush x:Key="AccentInk"    Color="#FFFFFF"/>
+    <SolidColorBrush x:Key="Live"         Color="#D14343"/>
+    <Color x:Key="AccentColor">#E8642A</Color>
+</ResourceDictionary>

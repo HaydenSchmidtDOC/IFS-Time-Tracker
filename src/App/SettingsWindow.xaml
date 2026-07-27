@@ -27,18 +27,88 @@
             <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="20,14,20,18">
                 <StackPanel>
 
+                    <!-- ===== Appearance ===== -->
+                    <TextBlock Text="APPEARANCE" Style="{StaticResource EyebrowText}" Margin="0,0,0,8"/>
+                    <TextBlock Text="Theme" FontSize="12.5" Foreground="{DynamicResource TextDim}" Margin="0,0,0,6"/>
+                    <ContentControl x:Name="ThemeModeHost" Margin="0,0,0,14"/>
+
+                    <StackPanel x:Name="AccentPanel">
+                        <TextBlock Text="Accent colour" FontSize="12.5" Foreground="{DynamicResource TextDim}" Margin="0,0,0,6"/>
+                        <ContentControl x:Name="AccentModeHost" Margin="0,0,0,10"/>
+                        <Grid x:Name="AccentSliderRow">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <Slider Grid.Column="0" x:Name="AccentHueSlider" Style="{StaticResource HueSliderStyle}"
+                                    VerticalAlignment="Center"/>
+                            <Border Grid.Column="1" Width="30" Height="30" Margin="12,0,0,0" CornerRadius="15"
+                                    BorderBrush="{DynamicResource BorderStrong}" BorderThickness="1.5">
+                                <Border.Background>
+                                    <SolidColorBrush x:Name="AccentPreviewBrush"/>
+                                </Border.Background>
+                            </Border>
+                        </Grid>
+                    </StackPanel>
+
+                    <StackPanel x:Name="CustomThemePanel">
+                        <TextBlock Text="Custom theme" FontSize="12.5" Foreground="{DynamicResource TextDim}" Margin="0,0,0,6"/>
+                        <ComboBox x:Name="CustomThemeCombo" Style="{StaticResource Dropdown}" HorizontalAlignment="Left" MinWidth="160">
+                            <ComboBoxItem Content="Nightshade"/>
+                            <ComboBoxItem Content="Terminal"/>
+                            <ComboBoxItem Content="Sunset"/>
+                        </ComboBox>
+                    </StackPanel>
+
+                    <Border Height="1" Background="{DynamicResource Border}" Margin="0,18"/>
+
                     <!-- ===== Tracking ===== -->
                     <TextBlock Text="TRACKING" Style="{StaticResource EyebrowText}" Margin="0,0,0,8"/>
-                    <CheckBox x:Name="PromptNoteCheck" Content="Prompt for an optional note on stop/switch"
-                              Foreground="{DynamicResource Text}" FontSize="13" Margin="0,0,0,8"/>
-                    <CheckBox x:Name="ShowPillCheck" Content="Show the floating status pill"
-                              Foreground="{DynamicResource Text}" FontSize="13" Margin="0,0,0,8"/>
-                    <CheckBox x:Name="ShowTrayCheck" Content="Show the system-tray icon"
-                              Foreground="{DynamicResource Text}" FontSize="13" Margin="0,0,0,8"/>
-                    <CheckBox x:Name="StartMinimizedCheck" Content="Start minimised (tray/pill only, no window)"
-                              Foreground="{DynamicResource Text}" FontSize="13" Margin="0,0,0,8"/>
-                    <CheckBox x:Name="StartWithWindowsCheck" Content="Start automatically when Windows starts"
-                              Foreground="{DynamicResource Text}" FontSize="13" Margin="0,0,0,4"/>
+                    <Grid Margin="0,0,0,10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="Prompt for an optional note on stop/switch" FontSize="13"
+                                   Foreground="{DynamicResource Text}" VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,0,10,0"/>
+                        <ContentControl Grid.Column="1" x:Name="PromptNoteToggleHost" Focusable="False" VerticalAlignment="Center"/>
+                    </Grid>
+                    <Grid Margin="0,0,0,10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="Show the floating status pill" FontSize="13"
+                                   Foreground="{DynamicResource Text}" VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,0,10,0"/>
+                        <ContentControl Grid.Column="1" x:Name="ShowPillToggleHost" Focusable="False" VerticalAlignment="Center"/>
+                    </Grid>
+                    <Grid Margin="0,0,0,10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="Show the system-tray icon" FontSize="13"
+                                   Foreground="{DynamicResource Text}" VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,0,10,0"/>
+                        <ContentControl Grid.Column="1" x:Name="ShowTrayToggleHost" Focusable="False" VerticalAlignment="Center"/>
+                    </Grid>
+                    <Grid Margin="0,0,0,10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="Start minimised (tray/pill only, no window)" FontSize="13"
+                                   Foreground="{DynamicResource Text}" VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,0,10,0"/>
+                        <ContentControl Grid.Column="1" x:Name="StartMinimizedToggleHost" Focusable="False" VerticalAlignment="Center"/>
+                    </Grid>
+                    <Grid Margin="0,0,0,4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="Start automatically when Windows starts" FontSize="13"
+                                   Foreground="{DynamicResource Text}" VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,0,10,0"/>
+                        <ContentControl Grid.Column="1" x:Name="StartWithWindowsToggleHost" Focusable="False" VerticalAlignment="Center"/>
+                    </Grid>
                     <TextBlock Text="Only reliable if the app isn't running from a OneDrive-synced folder — cloud sync can still be mounting the file when Windows processes startup entries, so the launch silently does nothing."
                                FontSize="11" Foreground="{DynamicResource TextFaint}" Margin="0,0,0,10" TextWrapping="Wrap"/>
                     <Grid>
