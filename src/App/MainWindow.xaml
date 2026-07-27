@@ -165,7 +165,7 @@
                            Visibility="Collapsed"/>
 
                 <!-- footer -->
-                <Button Content="📊 View timesheets" Click="Timesheets_Click" Style="{StaticResource Btn}"
+                <Button x:Name="TimesheetsBtn" Content="📊 View timesheets" Click="Timesheets_Click" Style="{StaticResource Btn}"
                         Margin="0,14,0,8"/>
                 <Grid>
                     <Grid.ColumnDefinitions>
@@ -173,8 +173,8 @@
                         <ColumnDefinition Width="8"/>
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
-                    <Button Grid.Column="0" Content="＋ Add project" Click="AddProject_Click" Style="{StaticResource Btn}"/>
-                    <Button Grid.Column="2" Content="⚙ Settings" Click="Settings_Click" Style="{StaticResource Btn}"/>
+                    <Button Grid.Column="0" x:Name="AddProjectBtn" Content="＋ Add project" Click="AddProject_Click" Style="{StaticResource Btn}"/>
+                    <Button Grid.Column="2" x:Name="SettingsBtn" Content="⚙ Settings" Click="Settings_Click" Style="{StaticResource Btn}"/>
                 </Grid>
             </StackPanel>
         </Grid>

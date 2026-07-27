@@ -127,6 +127,15 @@
                                TextWrapping="Wrap" Margin="0,8,0,0" Visibility="Collapsed"/>
 
                     <Border Height="1" Background="{DynamicResource Border}" Margin="0,18"/>
+
+                    <!-- ===== Getting started ===== -->
+                    <TextBlock Text="GETTING STARTED" Style="{StaticResource EyebrowText}" Margin="0,0,0,8"/>
+                    <TextBlock Text="Replay the guided tour of adding a project, tracking time, and using the timesheets."
+                               FontSize="12" Foreground="{DynamicResource TextDim}" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                    <Button Content="▶ Start tutorial" Click="StartTutorial_Click" Style="{StaticResource Btn}"
+                            HorizontalAlignment="Left"/>
+
+                    <Border Height="1" Background="{DynamicResource Border}" Margin="0,18"/>
                     <Button Content="Save" Click="Save_Click" Style="{StaticResource BtnAccent}"/>
                     <TextBlock x:Name="VersionText" FontSize="10.5" Foreground="{DynamicResource TextFaint}"
                                HorizontalAlignment="Center" Margin="0,14,0,0"/>

@@ -209,6 +209,17 @@ public partial class SettingsWindow : Window
 
     private void Save_Click(object sender, RoutedEventArgs e) { _closingConfirmed = true; SaveToSettings(); Close(); }
     private void Close_Click(object sender, RoutedEventArgs e) => Close();
+
+    // Goes through the same Close() -> OnClosing unsaved-changes guard as the ✕ button (rather
+    // than forcing _closingConfirmed = true) — starting the tour isn't an explicit "discard my
+    // edits" action, so any pending changes still get the normal save/discard/cancel prompt.
+    // Close() is synchronous: if OnClosing cancels it, the window is still IsVisible when it
+    // returns, so that's the signal the tour should NOT start after all.
+    private void StartTutorial_Click(object sender, RoutedEventArgs e)
+    {
+        Close();
+        if (!IsVisible) A.StartTutorial();
+    }
     private void TitleBar_Drag(object sender, MouseButtonEventArgs e) { if (e.ChangedButton == MouseButton.Left) DragMove(); }
 
     // ================= unsaved-changes guard =================

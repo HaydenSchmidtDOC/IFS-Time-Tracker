@@ -161,7 +161,7 @@
 
                 <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center"
                             shell:WindowChrome.IsHitTestVisibleInChrome="True">
-                    <Button Content="＋" Click="AddTime_Click" Style="{StaticResource IconBtn}" FontSize="14"
+                    <Button x:Name="AddTimeBtn" Content="＋" Click="AddTime_Click" Style="{StaticResource IconBtn}" FontSize="14"
                             Margin="0,0,10,0" ToolTip="Add time manually"/>
                     <!-- Populated in code-behind: SegmentedToggle (Totals/Calendar) has no XAML
                          template of its own — see TimesheetWindow ctor. -->

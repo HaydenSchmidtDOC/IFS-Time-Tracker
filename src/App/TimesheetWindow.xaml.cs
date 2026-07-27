@@ -138,17 +138,7 @@ public partial class TimesheetWindow : Window
         _viewMode = A.Settings.DefaultTimesheetView == "Calendar" ? ViewMode.Calendar : ViewMode.Bar;
 
         _viewToggle = new SegmentedToggle("Totals", "Calendar", _viewMode == ViewMode.Calendar ? 1 : 0, fontSize: 11.5);
-        _viewToggle.SelectionChanged += idx =>
-        {
-            _viewMode = idx == 1 ? ViewMode.Calendar : ViewMode.Bar;
-            _calendarScrollOffset = null; // re-center on work hours each time Calendar is switched into
-            CalendarPxPerHour = 60; // and reset any zoom from a prior calendar session
-            RenderCurrentWeek(0, crossFade: true);
-            UpdateMergeToggleVisibility(animate: true);
-            // Remember this as the view a fresh open should resume on — see ViewMode's remarks.
-            A.Settings.DefaultTimesheetView = _viewMode == ViewMode.Calendar ? "Calendar" : "Bar";
-            A.Store.SaveSettings(A.Settings);
-        };
+        _viewToggle.SelectionChanged += ApplyViewModeChange;
         ViewToggleHost.Content = _viewToggle.Root;
         InitTimesheetSettingsPopover();
         UpdateMergeToggleVisibility(animate: false);
@@ -166,6 +156,33 @@ public partial class TimesheetWindow : Window
         // live-update wiring rather than relying on a fresh instance to pick up new state.
         A.Tick += OnTick;
         A.StateChanged += OnStateChanged;
+    }
+
+    /// <summary>Everything a view switch entails, shared by the toggle's own SelectionChanged
+    /// (user click) and SelectView below (programmatic, e.g. driven by the tutorial) — SetIndex
+    /// deliberately does NOT raise SelectionChanged on its own (see its remarks), so a
+    /// programmatic switch has to run this body itself rather than piggyback on the event.</summary>
+    private void ApplyViewModeChange(int idx)
+    {
+        _viewMode = idx == 1 ? ViewMode.Calendar : ViewMode.Bar;
+        _calendarScrollOffset = null; // re-center on work hours each time Calendar is switched into
+        CalendarPxPerHour = 60; // and reset any zoom from a prior calendar session
+        RenderCurrentWeek(0, crossFade: true);
+        UpdateMergeToggleVisibility(animate: true);
+        // Remember this as the view a fresh open should resume on — see ViewMode's remarks.
+        A.Settings.DefaultTimesheetView = _viewMode == ViewMode.Calendar ? "Calendar" : "Bar";
+        A.Store.SaveSettings(A.Settings);
+    }
+
+    /// <summary>Programmatically switch view (Totals/Calendar) — used by the tutorial to drive
+    /// the walkthrough without simulating a click on the toggle itself. A no-op if already on the
+    /// requested view.</summary>
+    internal void SelectView(bool calendar)
+    {
+        int idx = calendar ? 1 : 0;
+        if (_viewToggle.SelectedIndex == idx) return;
+        _viewToggle.SetIndex(idx, animate: true);
+        ApplyViewModeChange(idx);
     }
 
     // A committed block changed the CSV on disk — the cached week no longer reflects it.
@@ -242,8 +259,19 @@ public partial class TimesheetWindow : Window
 
             double startH = startLocal.TimeOfDay.TotalHours;
             double endH = now.TimeOfDay.TotalHours;
+            double newHeight = Math.Max(3, (endH - startH) * CalendarPxPerHour);
+
+            // A session that was still under one of BuildCalendar's own label-height gates (16px
+            // for the code label, 34px for the time range under it) at its very first render never
+            // got that label built at all — only ever resizing/repositioning the SAME elements
+            // here can't retroactively add one, so once it's grown enough to deserve one, fall
+            // back to a real rebuild (which will build it labeled this time) instead of patching
+            // it in place, forever unlabeled.
+            if (!_liveTickBlockLabeled && newHeight >= 16) return false;
+            if (_liveTickBlockLabeled && _liveTickTimeLabel is null && newHeight >= 34) return false;
+
             Canvas.SetTop(_liveTickBlockElement, startH * CalendarPxPerHour);
-            _liveTickBlockElement.Height = Math.Max(3, (endH - startH) * CalendarPxPerHour);
+            _liveTickBlockElement.Height = newHeight;
             if (_liveTickTimeLabel is not null) _liveTickTimeLabel.Text = $"{startLocal:HH:mm}–{now:HH:mm}";
         }
 
@@ -1160,6 +1188,13 @@ public partial class TimesheetWindow : Window
     private Border? _liveTickBlockElement;
     private TextBlock? _liveTickTimeLabel;
     private Line? _liveTickNowLine;
+    /// <summary>Whether the last full render actually gave the live block its code/time label —
+    /// false for a session so freshly started that its very first render landed below the 16px
+    /// MinHeightForGrips threshold (see BuildCalendar's own labelling gate). The per-second patch
+    /// below only ever resizes/repositions the SAME elements; it never adds a label that wasn't
+    /// there to begin with, so a session that started sub-threshold would otherwise keep growing
+    /// tick after tick with no title ever appearing. See TryUpdateLiveCalendarInPlace.</summary>
+    private bool _liveTickBlockLabeled;
 
     private FrameworkElement BuildCalendar(Dictionary<DateTime, List<TimeBlock>> byDay, TimeBlock? liveBlock,
         double width, double height, DateTime today)
@@ -1171,6 +1206,7 @@ public partial class TimesheetWindow : Window
         _liveTickBlockElement = null;
         _liveTickTimeLabel = null;
         _liveTickNowLine = null;
+        _liveTickBlockLabeled = false;
 
         const double yAxisW = 40;
         const double xAxisH = 32; // matches BuildChart's day-label strip height
@@ -1549,6 +1585,7 @@ public partial class TimesheetWindow : Window
                 {
                     _liveTickBlockElement = block;
                     _liveTickTimeLabel = timeLabel;
+                    _liveTickBlockLabeled = segH >= 16 && resolved is not null;
                 }
 
                 if (topGrip is not null && botGrip is not null)
@@ -1721,6 +1758,11 @@ public partial class TimesheetWindow : Window
         double YToMinutes(double y) => y / CalendarPxPerHour * 60.0;
         double MinutesToY(double minutes) => minutes / 60.0 * CalendarPxPerHour;
         double SnapTo(double rawMinutes, int step) => Math.Round(rawMinutes / step) * (double)step;
+
+        // Shared by the move-drag's MouseMove (to withhold any visual movement/snapping until a
+        // press has actually left click range) and MouseLeftButtonUp (to tell a genuine drag from
+        // a stray click) — see both use sites for the full story.
+        const double ClickThresholdPx = 3;
 
         // ==================== drag-to-add (empty space) ====================
         // A click-drag on blank grid space (as opposed to _drag above, which moves/resizes an
@@ -1947,6 +1989,15 @@ public partial class TimesheetWindow : Window
             }
             else
             {
+                // A whole-block move doesn't touch the element's position at all until the press
+                // has actually left click range — otherwise ordinary hardware jitter on what the
+                // user experiences as a stationary click was enough to snap the block to the grid
+                // for a frame before MouseUp's own click-vs-drag check (below) reverts it via
+                // RenderCurrentWeek, reading as a visible "jump" right as the edit dialog opens.
+                // A resize grip doesn't get this treatment (see MouseLeftButtonUp's own remarks).
+                double totalDx = e.GetPosition(canvas).X - d.StartMouseX;
+                if (Math.Abs(deltaY) < ClickThresholdPx && Math.Abs(totalDx) < ClickThresholdPx) return;
+
                 int snap = Math.Max(1, A.Settings.DragSnapMinutes);
                 double newTop = Clamp(MinutesToY(SnapTo(YToMinutes(d.OrigTop + deltaY), snap)), d.LowBound, d.HighBound);
                 Canvas.SetTop(d.Element, newTop);
@@ -1992,7 +2043,6 @@ public partial class TimesheetWindow : Window
             // A whole-block "move" with (near-)zero actual movement is a click, not a drag — open
             // the edit dialog instead of writing back the (unchanged) position. A resize grip is
             // small and single-purpose enough that it doesn't get this treatment.
-            const double ClickThresholdPx = 3;
             var upPos = e.GetPosition(canvas);
             if (!d.IsResize && Math.Abs(upPos.Y - d.StartMouseY) < ClickThresholdPx && Math.Abs(upPos.X - d.StartMouseX) < ClickThresholdPx)
             {

@@ -261,7 +261,7 @@
   </div>
   <h1>IFS Time Tracker</h1>
   <p class="tagline">Track hours against IFS projects without leaving your desktop.</p>
-  <span class="beta-chip">v0.3.0 Beta · quick guide</span>
+  <span class="beta-chip">v0.4.0 Beta · quick guide</span>
 </header>
 
 <nav class="toc">
@@ -280,19 +280,20 @@
 <div class="wrap">
 
   <section id="whatsnew">
-    <h2>New in v0.3.0</h2>
-    <h3>Adding time is safer, and a bit more flexible</h3>
-    <p class="lede">Worth a skim before you dive back in — this round is mostly about what happens when manually-added time and live tracking might otherwise collide.</p>
+    <h2>New in v0.4.0</h2>
+    <h3>A guided first-run tour, plus a smarter, safer Calendar</h3>
+    <p class="lede">The headline this round is a short click-through tour for new installs — but there's also a full pass of Calendar-view polish and safety fixes worth knowing about.</p>
 
     <ul class="list">
-      <li><b>"By amount" no longer needs a specific time.</b> Adding time by amount now just logs a total for that day and project — no clock position, so it never has to fit in whatever gap is left, and it can't collide with anything. In Calendar view it shows as a small chip under the day header instead of a positioned block.</li>
-      <li><b>Tracking now protects itself from overlaps.</b> Starting or switching projects refuses (and tells you why) if "now" already falls inside something you've already logged. And if a running session grows into the start of a block you placed ahead of it, it stops right there instead of quietly overlapping it.</li>
-      <li>Because of the above, adding time by exact times (or dragging a block) can now target the future — that used to be restricted, and no longer needs to be.</li>
-      <li>A small <b>＋</b> now sits above every day's bar in Totals view too, opening the same Add dialog pre-set to that day.</li>
-      <li>The app version now shows at the bottom of Settings.</li>
+      <li><b>Guided first-run tour.</b> A fresh install now offers a short walkthrough — adding a project, tracking time, the quick switcher, and a full tour of the Timesheets window (both views, merge, and drag-to-add/edit/resize/delete in Calendar view, mimed on an overlay rather than touching your real data). Skipped it, or want to see it again? Replay it any time from <b>Settings → Start tutorial</b>.</li>
+      <li><b>Drag to add time in Calendar view.</b> Click-drag empty grid space to highlight a span — showing the snapped time range and, once tall enough, the duration — and release to open the Add dialog pre-filled to it.</li>
+      <li><b>A note prompt when a live session auto-stops on collision</b>, instead of silently banking an empty note — same as a normal Stop.</li>
+      <li><b>Smarter manual add times.</b> A fresh entry now defaults to a sensible 1-hour span (or snaps sooner against whatever's next) instead of a fixed length, and an entry that spans one or more existing blocks now splits around them instead of being rejected.</li>
+      <li>Editing a block now shows (and lets you change) its note.</li>
+      <li><b>Merge sessions</b> is now a one-click toggle pinned to the chart's corner instead of buried in a settings popover, and the Timesheets window <b>remembers whichever view (Totals/Calendar) you last used</b> instead of a fixed default.</li>
     </ul>
 
-    <p style="margin-top:18px"><b>Also fixed:</b> a crash when closing the Add-time dialog, which now also dismisses on an outside click like the Timesheet settings popover; and the Timesheets window's open/close animation, which went through a few rough rounds and is now a plain, reliable fade on the chart area (the header bar stays static on purpose).</p>
+    <p style="margin-top:18px"><b>Also fixed:</b> a Calendar block no longer visibly jumps/snaps right before its edit dialog opens when you click it; the currently-recording block always shows its title now, even if it started too small to fit one at first; double-click/Enter on the project you're already tracking now stops it, matching the button; the floating pill no longer shows up in Alt-Tab; and an idle discard's note now backfills onto every earlier split of that session, not just the last one.</p>
 
     <div class="callout beta">
       <h4>Known limitations</h4>
@@ -328,7 +329,7 @@
       <li><b>■ Stop</b> — shown when the project you have selected is the one currently tracking.</li>
       <li><b>⇆ Switch</b> — shown when a <i>different</i> project is selected while one is already running. It banks the current block first, then starts the new one — no time is lost in between.</li>
     </ul>
-    <p>Selecting a project in the list never starts it by itself — you always have to confirm with the button, Enter, or a double-click.</p>
+    <p>Selecting a project in the list never starts it by itself — you always have to confirm with the button, Enter, or a double-click. Enter or a double-click on the project that's <i>already</i> running stops it, same as pressing the button.</p>
   </section>
 
   <section id="switcher">
@@ -459,7 +460,7 @@
       <li><b>Move between weeks</b> with the arrow buttons, the on-screen arrows, or your scroll wheel/trackpad.</li>
       <li>Each day's bar stacks segments <b>most-recently-worked on top</b>, so whatever you're doing right now is easiest to spot.</li>
       <li>The <b>live segment</b> (today, if you're currently tracking) gets a solid outline and a small pulsing dot next to its label, so it reads as "still going" at a glance.</li>
-      <li>By default every session for a project on a day is <b>merged into one bar</b> — a setting in the Timesheets ⚙ popover (bottom-right of the chart) can switch this so only back-to-back sessions with a matching note merge, and the same project touched again later shows as its own separate segment.</li>
+      <li>By default every session for a project on a day is <b>merged into one bar</b> — a toggle pinned to the chart's bottom-right corner (next to the ⚙) can switch this so only back-to-back sessions with a matching note merge, and the same project touched again later shows as its own separate segment. It fades out in Calendar view, where merging doesn't apply.</li>
       <li><b>Click a day</b> to open its individual time blocks — each one can be deleted (with a confirm step) if you logged something by mistake.</li>
       <li>Very short segments get folded into a neutral "Other" bucket so the chart doesn't get cluttered — hover it for the breakdown. This only changes how the chart <i>looks</i>; it never touches your recorded data or the IFS export.</li>
     </ul>
@@ -483,7 +484,7 @@
         <p>Shows where your data lives (this OneDrive folder, by default — that's what makes it sync) and lets you point it elsewhere if needed.</p>
       </div>
     </div>
-    <p style="margin-top:14px">Timesheet-view settings — snap distances, default view, chart grouping, and the small-segment fold threshold — live in their own popover instead: the <b>⚙</b> in the bottom-right corner of the Timesheets chart. They apply immediately as you change them, no Save button.</p>
+    <p style="margin-top:14px">Timesheet-view settings — the calendar drag-snap granularity, minimum split-block size, and how aggressively small segments fold together in Totals view — live in their own popover instead: the <b>⚙</b> in the bottom-right corner of the Timesheets chart. They apply immediately as you change them, no Save button. Merging sessions is a separate one-click toggle right next to it, and the window itself remembers whichever view you last had open.</p>
   </section>
 
   <section id="export">

@@ -1,0 +1,29 @@
+<Window x:Class="TimeTracker.App.Tutorial.WelcomePrompt"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Welcome" Width="320" SizeToContent="Height"
+        WindowStartupLocation="CenterScreen" WindowStyle="None" AllowsTransparency="True"
+        Background="Transparent" ResizeMode="NoResize" ShowInTaskbar="False"
+        Topmost="True" FontFamily="{StaticResource UiFont}">
+    <Border Background="{DynamicResource Surface}" CornerRadius="12" Margin="12">
+        <Border.Effect>
+            <DropShadowEffect BlurRadius="10" ShadowDepth="2" Opacity="0.32" Color="#20283C"/>
+        </Border.Effect>
+        <StackPanel Margin="18">
+            <TextBlock Text="Welcome to IFS Time Tracker" FontSize="14" FontWeight="SemiBold"
+                       Foreground="{DynamicResource Text}" TextWrapping="Wrap"/>
+            <TextBlock FontSize="12.5" Foreground="{DynamicResource TextDim}" TextWrapping="Wrap"
+                       Margin="0,6,0,16"
+                       Text="Want a quick two-minute tour? It'll show you how to add a project, track time, and use the timesheets — nothing you do during it is saved."/>
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="8"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Button Grid.Column="0" Content="Skip" Click="Skip_Click" Style="{StaticResource Btn}"/>
+                <Button Grid.Column="2" Content="Start tutorial" Click="Start_Click" Style="{StaticResource BtnAccent}" IsDefault="True"/>
+            </Grid>
+        </StackPanel>
+    </Border>
+</Window>

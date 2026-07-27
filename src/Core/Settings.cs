@@ -98,4 +98,13 @@ public sealed class Settings
     /// it off — every non-zero gap becomes its own entry.
     /// </summary>
     public int MinSplitBlockMinutes { get; set; } = 5;
+
+    /// <summary>False until the first-run onboarding prompt ("Start tutorial?") has been shown,
+    /// so it only ever appears once per install — a fresh install has no settings.json at all,
+    /// which deserializes this to its default (false), giving a clean first-run signal with no
+    /// separate version/marker file needed (see JsonStore.LoadSettings). Set true the moment the
+    /// prompt is shown (whether the user starts or skips the tour), not on tour completion, so a
+    /// crash mid-tour can never cause it to re-nag on the next launch. The Settings window's own
+    /// "Start tutorial" button re-runs the tour on demand regardless of this flag.</summary>
+    public bool OnboardingPromptShown { get; set; } = false;
 }

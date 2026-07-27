@@ -1,5 +1,72 @@
 # Changelog
 
+## [0.4.0] Beta — 2026-07-27
+
+### New
+
+- **Guided first-run tour.** A fresh install now offers a short, click-through tour — adding a
+  project, tracking time, the quick switcher, and a full walkthrough of the Timesheets window
+  (both views, merge, and drag-to-add/edit/resize/delete in Calendar view, mimed with an
+  animated overlay rather than touching real data). Skipped it, or want to see it again? Replay
+  it any time from Settings → Start tutorial.
+- **Drag to add time in Calendar view.** Click-drag empty grid space to highlight a span
+  (showing the snapped time range and, once tall enough, the duration), release to open the Add
+  dialog pre-filled to it. Hovering empty space shows a small "+" cursor instead of the default
+  arrow.
+- **A note prompt when a live session auto-stops on collision**, instead of silently banking an
+  empty note — same as a normal Stop.
+- **Smarter add-time defaults and multi-block splitting.** A fresh Times-mode add now defaults
+  to a 1-hour span (or snaps sooner to butt against whatever's next) instead of a fixed
+  configured duration. An entry that cleanly spans one or more whole existing blocks now splits
+  into separate entries around them instead of being rejected, with gaps shorter than the
+  configured minimum absorbed rather than becoming their own sliver rows.
+- Editing an existing block now also shows its note, editable.
+- **Merge sessions is now a one-click toggle** pinned to the chart's bottom-right corner
+  (instead of buried in the settings popover), and the Timesheets window now **remembers
+  whichever view (Totals/Calendar) you last used** instead of a fixed configured default.
+- A block's note now shows under its time range in Calendar view, once there's room.
+
+### Fixed
+
+- A Calendar block no longer visibly jumps/snaps right before its edit dialog opens when you
+  click it — grid-snapping now only kicks in once a press has actually left click range, not on
+  the first pixel of hardware jitter.
+- The currently-recording block in Calendar view always shows its title now, even if the
+  session started too small to fit one at first (previously it could stay unlabeled for its
+  whole duration).
+- Double-click or Enter on the project you're already tracking now stops it, matching what the
+  button does — previously all three quietly did nothing.
+- The floating pill no longer shows up in Alt-Tab.
+- An idle discard's note now backfills onto every earlier split of that session when it's later
+  stopped with a note, not just the final one.
+- The quick switcher now closes before a note prompt pops up, not after, so it doesn't linger
+  stacked underneath it.
+- Fixed the bar view's stacked-segment height: a fixed per-segment gap was being added on top of
+  each segment's proportional height rather than carved out of it, so a day split into many
+  small segments visibly grew taller than an equal-hours day with fewer of them.
+- The Timesheet settings popover no longer flickers open then immediately shut on the same click
+  that was meant to open it.
+- The once-a-second live-tick redraw in Calendar view no longer resets hover/cursor state on
+  whatever the mouse happens to be sitting on — it patches the running block in place instead of
+  rebuilding the whole canvas every second.
+
+### Under the hood
+
+- Merged the two calendar drag-snap settings (edge-resize, whole-block move) into one
+  `DragSnapMinutes`; added `MinSplitBlockMinutes` for the new multi-block-split threshold; and
+  dropped the separate "default view on open" setting now that the header toggle itself
+  remembers the last-used view.
+- Split live-session-collision handling into a peek/finish pair so the app layer can prompt for
+  a note in between, the same shape a normal Stop already used.
+
+### Known limitations
+
+- **No undo yet.** Deleting or dragging a block is immediate — a bad drop or misclick means
+  manually correcting it. The data folder lives in OneDrive by default, so its file version
+  history is a partial safety net, but treat drag/delete carefully until in-app undo exists.
+- A block can't be dragged across a month boundary (e.g. the last day of July onto the 1st of
+  August) — that specific move is rejected/reverted rather than applied.
+
 ## [0.3.0] Beta — 2026-07-23
 
 ### New

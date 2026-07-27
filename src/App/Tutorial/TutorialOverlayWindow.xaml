@@ -1,0 +1,12 @@
+<Window x:Class="TimeTracker.App.Tutorial.TutorialOverlayWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="" WindowStyle="None" AllowsTransparency="True" Background="Transparent"
+        ShowInTaskbar="False" Topmost="True" ResizeMode="NoResize"
+        WindowStartupLocation="Manual" FontFamily="{StaticResource UiFont}">
+    <!-- Everything is built in code-behind (scrim, spotlight, arrow, card, ghost layer) — the
+         geometry/positions all depend on where the current step's target element actually sits
+         on screen, which is only known at runtime, the same reason the calendar/chart views in
+         TimesheetWindow are code-drawn onto a bare Canvas rather than laid out in XAML. -->
+    <Canvas x:Name="RootCanvas"/>
+</Window>

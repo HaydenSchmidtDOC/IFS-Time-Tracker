@@ -6,6 +6,7 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using Microsoft.Win32;
 using TimeTracker.App.Interop;
+using TimeTracker.App.Tutorial;
 using TimeTracker.App.UI;
 using TimeTracker.Core;
 using WinForms = System.Windows.Forms;
@@ -133,7 +134,42 @@ public partial class App : Application
 
         UpdateTray();
         if (!Settings.StartMinimized) ShowMainWindow();
+
+        // Exactly once per install (a fresh one has no settings.json at all, so this defaults to
+        // false — see OnboardingPromptShown's own remarks). Flipped true the moment the prompt is
+        // SHOWN, not once the tour finishes, so a crash mid-tour can never cause it to re-nag on
+        // the next launch. Force main on screen first regardless of StartMinimized — there'd
+        // otherwise be nothing for the first arrow to point at, and no visible window for the
+        // welcome popup itself to sit in front of.
+        if (!Settings.OnboardingPromptShown)
+        {
+            ShowMainWindow();
+            Settings.OnboardingPromptShown = true;
+            Store.SaveSettings(Settings);
+            if (WelcomePrompt.Ask()) StartTutorial();
+        }
     }
+
+    /// <summary>Runs the guided tour — the single entry point for both the first-run welcome
+    /// prompt above and the Settings window's own "Start tutorial" button.</summary>
+    public void StartTutorial() => new TutorialController().Start();
+
+    /// <summary>The persistent main window instance — internal accessor so TutorialController can
+    /// resolve its named elements (buttons, project list) as arrow targets without a public
+    /// Show/Hide-only surface getting in the way.</summary>
+    internal MainWindow MainWindowRef => _main;
+
+    /// <summary>Lazily creates (but does not show) the timesheet window — same "??=" OpenTimesheets
+    /// already uses below, exposed separately so TutorialController can resolve its named elements
+    /// (view toggle, settings button, chart host, ...) as arrow targets. Actually making it VISIBLE
+    /// is still only ever done through OpenTimesheets (see TutorialController.EnsureHostVisible),
+    /// so its open animation stays the one and only place that happens.</summary>
+    internal TimesheetWindow EnsureTimesheets() => _timesheets ??= new TimesheetWindow();
+
+    /// <summary>Whether the timesheet window (rather than the main window) is the one currently on
+    /// screen — lets TutorialController correctly reverse an open when stepping back to a
+    /// MainWindow step.</summary>
+    internal bool IsTimesheetsVisible => _timesheets is { IsVisible: true };
 
     // ---------------- theme ----------------
 
