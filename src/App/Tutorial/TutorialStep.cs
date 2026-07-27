@@ -39,4 +39,9 @@ internal sealed class TutorialStep
     public Action? OnEnter { get; init; }
 
     public GhostDemo Ghost { get; init; } = GhostDemo.None;
+
+    /// <summary>For a target-less step only: park the card in the work area's bottom-right corner
+    /// instead of dead-center — used for the tray-icon step, since the tray icon itself lives in
+    /// the taskbar (outside any app window) and can't be a real ResolveTarget.</summary>
+    public bool AnchorBottomRight { get; init; }
 }

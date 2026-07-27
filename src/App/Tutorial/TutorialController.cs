@@ -192,6 +192,13 @@ internal sealed class TutorialController
         new TutorialStep
         {
             Host = TutorialHost.MainWindow,
+            AnchorBottomRight = true,
+            Title = "Tray icon",
+            Body = "That's your tray icon down there. Hidden under the ^ arrow? Drag it out to pin it to your taskbar.",
+        },
+        new TutorialStep
+        {
+            Host = TutorialHost.MainWindow,
             ResolveTarget = () => A.MainWindowRef.TimesheetsBtn,
             Title = "See where your time went",
             Body = "The timesheets view shows a full week of tracked time, two different ways. Let's take a look.",

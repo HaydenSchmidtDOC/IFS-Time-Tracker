@@ -83,7 +83,7 @@ public partial class TutorialOverlayWindow : Window
         Canvas.SetZIndex(card, 20);
         card.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
         var cardSize = card.DesiredSize;
-        var (cardPos, side) = PlaceCard(targetLocal, cardSize);
+        var (cardPos, side) = PlaceCard(targetLocal, cardSize, step.AnchorBottomRight);
         Canvas.SetLeft(card, cardPos.X);
         Canvas.SetTop(card, cardPos.Y);
 
@@ -269,12 +269,17 @@ public partial class TutorialOverlayWindow : Window
     /// centered step, dead center. Returns the chosen side too, purely so BuildArrow doesn't have
     /// to re-derive it from the resulting geometry (which side the numbers land on can be
     /// ambiguous right at a boundary; the choice made here is the single source of truth).</summary>
-    private (Point Pos, Side Side) PlaceCard(Rect? targetLocal, Size cardSize)
+    private (Point Pos, Side Side) PlaceCard(Rect? targetLocal, Size cardSize, bool anchorBottomRight = false)
     {
         const double gap = 8; // between the spotlight ring and the card
         const double margin = 20; // from the overlay's own edges
         if (targetLocal is not { } t)
-            return (new Point((Width - cardSize.Width) / 2, (Height - cardSize.Height) / 2), Side.Below);
+        {
+            var pos = anchorBottomRight
+                ? new Point(Width - margin - cardSize.Width, Height - margin - cardSize.Height)
+                : new Point((Width - cardSize.Width) / 2, (Height - cardSize.Height) / 2);
+            return (pos, Side.Below);
+        }
 
         var ring = Inflate(t, SpotlightPad);
         double belowY = ring.Bottom + gap;
