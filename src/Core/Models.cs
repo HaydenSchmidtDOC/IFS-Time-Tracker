@@ -29,6 +29,11 @@ public sealed class Project
 
     /// <summary>Display order in the switcher / list.</summary>
     public int Order { get; set; }
+
+    /// <summary>Whether this project shows up in the main window and switcher. Disabled
+    /// projects keep their history and stay editable from Settings — this only hides them
+    /// from the pick-a-project-to-track surfaces.</summary>
+    public bool Enabled { get; set; } = true;
 }
 
 /// <summary>One completed unit of tracked work — a single row in the monthly CSV.</summary>

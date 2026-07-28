@@ -38,8 +38,32 @@ public sealed class Settings
     /// <summary>Show the system-tray icon.</summary>
     public bool ShowTrayIcon { get; set; } = true;
 
-    /// <summary>Start with the main window hidden (tray/pill only) rather than shown.</summary>
+    /// <summary>
+    /// Start with the main window not shown on screen rather than shown. What "not shown" means
+    /// depends on <see cref="MinimizeAppOnly"/>: when that's on (the default), the window is
+    /// still created minimised to the taskbar, so there's always a click-to-restore path even
+    /// with the pill/tray both off; when it's off, the window is skipped entirely (tray/pill
+    /// only, no taskbar entry) — the original behaviour, for users who deliberately want no
+    /// window-based way back in.
+    /// </summary>
     public bool StartMinimized { get; set; } = false;
+
+    /// <summary>Show each project's ASN next to its title in the main window's list.</summary>
+    public bool ShowAsnInMainList { get; set; } = false;
+
+    /// <summary>Show milliseconds on the main window's running timer.</summary>
+    public bool ShowTimerMilliseconds { get; set; } = false;
+
+    /// <summary>
+    /// Hide the main window's title-bar close (✕) button, leaving only minimise — defaults to on
+    /// since closing that window just hides it (see MainWindow's HideToTray_Click), and users who
+    /// then also have the pill and/or tray icon turned off have no obvious way back short of
+    /// relaunching the app. Minimise (which always leaves a taskbar button behind) still works
+    /// regardless of this setting. Main window only — the timesheet and Settings windows keep
+    /// their own close buttons. Also changes what StartMinimized means at launch — see its own
+    /// remarks.
+    /// </summary>
+    public bool MinimizeAppOnly { get; set; } = true;
 
     /// <summary>
     /// IFS export column mapping, in output column order. Refine the headers once a real

@@ -1,8 +1,10 @@
-using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Shapes;
 using TimeTracker.App.UI;
 using TimeTracker.Core;
@@ -20,10 +22,16 @@ public partial class SettingsWindow : Window
 
     private static readonly string[] ThemeModes = { "Light", "Dark", "System", "Custom" };
 
-    private readonly List<Project> _projects;                 // working copy
-    private readonly List<MappingEntry> _mapping;              // working copy
-    private DateTime _exportMonth = new(DateTime.Today.Year, DateTime.Today.Month, 1);
-    private bool _closingConfirmed;                            // set once Save/Discard has resolved, so OnClosing doesn't re-prompt
+    private readonly List<Project> _projects;
+    private List<FrameworkElement> _rowElements = new();
+
+    // drag state — all reset when not dragging
+    private int    _dragFromIndex    = -1;
+    private int    _dragToIndex      = -1;
+    private double _dragCursorOffsetY;
+    private double _dragRowHeight;
+    private double[] _naturalRowTops  = [];
+    private Popup?   _dragGhost;
 
     private SegmentedToggle _themeModeToggle = null!;
     private SegmentedToggle _accentModeToggle = null!;
@@ -33,38 +41,67 @@ public partial class SettingsWindow : Window
     private ToggleSwitch _showTrayToggle = null!;
     private ToggleSwitch _startMinimizedToggle = null!;
     private ToggleSwitch _startWithWindowsToggle = null!;
+    private ToggleSwitch _minimizeAppOnlyToggle = null!;
+    private ToggleSwitch _showAsnToggle = null!;
+    private ToggleSwitch _showMsToggle = null!;
 
     public SettingsWindow()
     {
         InitializeComponent();
+        Loaded += (_, _) => PositionNextToOwner();
+        KeyDown += (_, e) => { if (e.Key == Key.Escape) Close(); };
 
         var version = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
         VersionText.Text = version is null ? "" : $"IFS Time Tracker v{version.Major}.{version.Minor}.{version.Build}";
 
         var s = A.Settings;
         _promptNoteToggle = new ToggleSwitch(s.PromptForNote);
+        _promptNoteToggle.Toggled += on => { A.Settings.PromptForNote = on; A.Store.SaveSettings(A.Settings); };
         PromptNoteToggleHost.Content = _promptNoteToggle.Root;
+        _showMsToggle = new ToggleSwitch(s.ShowTimerMilliseconds);
+        _showMsToggle.Toggled += on => A.SetShowTimerMilliseconds(on);
+        ShowMsToggleHost.Content = _showMsToggle.Root;
         _showPillToggle = new ToggleSwitch(s.PillVisible);
+        _showPillToggle.Toggled += on => A.SetPillVisible(on);
         ShowPillToggleHost.Content = _showPillToggle.Root;
         _showTrayToggle = new ToggleSwitch(s.ShowTrayIcon);
+        _showTrayToggle.Toggled += on => A.SetTrayIconVisible(on);
         ShowTrayToggleHost.Content = _showTrayToggle.Root;
         _startMinimizedToggle = new ToggleSwitch(s.StartMinimized);
+        _startMinimizedToggle.Toggled += on => { A.Settings.StartMinimized = on; A.Store.SaveSettings(A.Settings); };
         StartMinimizedToggleHost.Content = _startMinimizedToggle.Root;
         _startWithWindowsToggle = new ToggleSwitch(StartupRegistration.IsEnabled());
+        _startWithWindowsToggle.Toggled += on => StartupRegistration.SetEnabled(on);
         StartWithWindowsToggleHost.Content = _startWithWindowsToggle.Root;
+        _minimizeAppOnlyToggle = new ToggleSwitch(s.MinimizeAppOnly);
+        _minimizeAppOnlyToggle.Toggled += on => A.SetMinimizeAppOnly(on);
+        MinimizeAppOnlyToggleHost.Content = _minimizeAppOnlyToggle.Root;
+        _showAsnToggle = new ToggleSwitch(s.ShowAsnInMainList);
+        _showAsnToggle.Toggled += on => A.SetShowAsnInMainList(on);
+        ShowAsnToggleHost.Content = _showAsnToggle.Root;
         IdleBox.Text = s.IdleThresholdMinutes.ToString();
-        DateFormatBox.Text = s.ExportDateFormat;
+        IdleBox.LostFocus += (_, _) =>
+        {
+            if (int.TryParse(IdleBox.Text, out var mins) && mins > 0)
+            {
+                A.Settings.IdleThresholdMinutes = mins;
+                A.Store.SaveSettings(A.Settings);
+                A.RefreshIdleThreshold();
+            }
+        };
         DataFolderText.Text = A.Paths.DataFolder;
         DataOverrideBox.Text = s.DataFolderOverride ?? "";
+        DataOverrideBox.LostFocus += (_, _) =>
+        {
+            A.Settings.DataFolderOverride = string.IsNullOrWhiteSpace(DataOverrideBox.Text) ? null : DataOverrideBox.Text.Trim();
+            A.Store.SaveSettings(A.Settings);
+        };
 
         _projects = A.Tracker.Projects.Select(Clone).ToList();
-        _mapping = s.IfsExportMapping.Select(m => new MappingEntry { Header = m.Header, Field = m.Field }).ToList();
 
         InitAppearance(s);
 
         RebuildProjectRows();
-        RebuildMappingRows();
-        RefreshMonthLabel();
     }
 
     // ================= Appearance =================
@@ -141,15 +178,29 @@ public partial class SettingsWindow : Window
             ? Visibility.Visible : Visibility.Collapsed;
     }
 
-    private static Project Clone(Project p) => new() { Id = p.Id, Code = p.Code, Asn = p.Asn, Name = p.Name, Color = p.Color, Order = p.Order };
+    private static Project Clone(Project p) => new() { Id = p.Id, Code = p.Code, Asn = p.Asn, Name = p.Name, Color = p.Color, Order = p.Order, Enabled = p.Enabled };
 
     // ================= Projects =================
+    // Drag uses mouse capture (not WPF DragDrop) so we can:
+    //   • show a floating ghost that follows the cursor
+    //   • animate the other rows sliding aside as the ghost crosses their midpoints
+    // Items use TranslateTransform for the visual shift; layout positions are unchanged so the
+    // StackPanel height stays constant throughout the drag.
 
     private void RebuildProjectRows()
     {
+        CleanUpDrag();
+        foreach (var el in _rowElements) { el.Opacity = 1; el.RenderTransform = null; }
+
         ProjectsList.Items.Clear();
+        _rowElements.Clear();
+
         foreach (var p in _projects)
-            ProjectsList.Items.Add(BuildProjectRow(p));
+        {
+            var row = (FrameworkElement)BuildProjectRow(p);
+            _rowElements.Add(row);
+            ProjectsList.Items.Add(row);
+        }
 
         if (_projects.Count == 0)
         {
@@ -161,109 +212,341 @@ public partial class SettingsWindow : Window
         }
     }
 
+    // Clicking the swatch toggles Project.Enabled instead of starting a drag — its container is
+    // tagged with this sentinel so the row's drag-start handler can exclude it the same way it
+    // already excludes Edit/Delete (see IsInsideDragExclusion).
+    private static readonly object NoDragZone = new();
+
     private UIElement BuildProjectRow(Project p)
     {
-        var grid = new Grid { Margin = new Thickness(0, 3, 0, 3) };
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        // grid.Background is set (even though transparent) because an unset Background isn't
+        // hit-testable in WPF — without it, PreviewMouseLeftButtonDown only fires over the dot/
+        // text/buttons, not the row's own blank space, so most of the "whole bounding box" would
+        // silently not start a drag.
+        var grid = new Grid { Margin = new Thickness(0, 3, 0, 3), Background = Brushes.Transparent };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });                          // 0: swatch
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });     // 1: label
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });                          // 2: edit
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });                          // 3: delete
 
-        var dot = new Rectangle { Width = 12, Height = 12, RadiusX = 3, RadiusY = 3, Fill = ColorUtil.Brush(p.Color), VerticalAlignment = VerticalAlignment.Center };
-        Grid.SetColumn(dot, 0);
+        // Hover highlight (not a special cursor) is the row's only "this can be dragged" hint —
+        // a plain Border layer behind everything else so it doesn't affect hit-testing/drag-
+        // exclusion, spanning all columns so the whole row lights up together.
+        var hoverBg = new Border { CornerRadius = new CornerRadius(6), Background = Brushes.Transparent, IsHitTestVisible = false };
+        Grid.SetColumnSpan(hoverBg, 4);
+        grid.MouseEnter += (_, _) => hoverBg.SetResourceReference(Border.BackgroundProperty, "Surface2");
+        grid.MouseLeave += (_, _) => hoverBg.Background = Brushes.Transparent;
+
+        var dot = new Rectangle { Width = 12, Height = 12, RadiusX = 3, RadiusY = 3, VerticalAlignment = VerticalAlignment.Center };
+        ApplySwatchAppearance(dot, p);
+        var swatchHost = new Border
+        {
+            Padding = new Thickness(4), Background = Brushes.Transparent, Cursor = Cursors.Hand,
+            Tag = NoDragZone, Child = dot,
+            ToolTip = p.Enabled ? "Click to disable this project" : "Click to enable this project",
+        };
+        swatchHost.PreviewMouseLeftButtonDown += (_, e) =>
+        {
+            p.Enabled = !p.Enabled;
+            RebuildProjectRows();
+            A.Tracker.UpdateProjects(_projects);
+            e.Handled = true;
+        };
+        Grid.SetColumn(swatchHost, 0);
 
         var label = new TextBlock
         {
-            Text = $"{p.Code}   ASN {p.Asn}", FontSize = 13, Margin = new Thickness(10, 0, 0, 0),
-            Foreground = (Brush)FindResource("Text"), VerticalAlignment = VerticalAlignment.Center,
+            FontSize = 13, Margin = new Thickness(10, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
             TextTrimming = TextTrimming.CharacterEllipsis,
+            // Grid doesn't clip children to their cell by default — the ghost's copy of this
+            // label already needed this (see BuildGhostContent); this row's own always-visible
+            // label needed it too, and was still bleeding into the Edit/Delete columns without it.
+            ClipToBounds = true,
         };
+        label.Inlines.Add(new Run(p.Code) { Foreground = (Brush)FindResource("Text") });
+        if (!string.IsNullOrEmpty(p.Asn))
+            label.Inlines.Add(new Run($" - {p.Asn}") { Foreground = (Brush)FindResource("TextFaint"), FontSize = 11 });
         Grid.SetColumn(label, 1);
 
         var editBtn = new Button { Content = "Edit", Style = (Style)FindResource("Btn"), FontSize = 11, Padding = new Thickness(9, 3, 9, 3), Margin = new Thickness(0, 0, 6, 0) };
         editBtn.Click += (_, _) =>
         {
-            // Exclude by Id, not Code — Code is now editable (see AddProjectDialog), so the
-            // uniqueness check below needs a stable way to mean "every OTHER project".
             var updated = AddProjectDialog.Edit(this, p, _projects.Where(x => x.Id != p.Id).ToList());
-            if (updated is not null) RebuildProjectRows();
+            if (updated is not null) { RebuildProjectRows(); A.Tracker.UpdateProjects(_projects); }
         };
         Grid.SetColumn(editBtn, 2);
 
         var delBtn = new Button { Content = "✕", Style = (Style)FindResource("Btn"), FontSize = 11, Padding = new Thickness(8, 3, 8, 3) };
-        delBtn.Click += (_, _) => { _projects.Remove(p); RebuildProjectRows(); };
+        delBtn.Click += (_, _) => { _projects.Remove(p); RebuildProjectRows(); A.Tracker.UpdateProjects(_projects); };
         Grid.SetColumn(delBtn, 3);
 
-        grid.Children.Add(dot);
+        grid.Children.Add(hoverBg);
+        grid.Children.Add(swatchHost);
         grid.Children.Add(label);
         grid.Children.Add(editBtn);
         grid.Children.Add(delBtn);
+
+        // Whole row starts a drag except Edit/Delete/the swatch, which still need their own
+        // clicks — PreviewMouseLeftButtonDown tunnels through the row before any of their own
+        // handling, so it's checked here rather than needing per-control suppression.
+        grid.PreviewMouseLeftButtonDown += (_, e) =>
+        {
+            if (IsInsideDragExclusion(e.OriginalSource as DependencyObject)) return;
+            BeginDrag(p.Id, e, grid);
+        };
         return grid;
+    }
+
+    private static void ApplySwatchAppearance(Rectangle swatch, Project p)
+    {
+        if (p.Enabled)
+        {
+            swatch.Fill = ColorUtil.Brush(p.Color);
+            swatch.Stroke = null;
+            swatch.StrokeThickness = 0;
+        }
+        else
+        {
+            swatch.Fill = Brushes.Transparent;
+            swatch.Stroke = ColorUtil.Brush(p.Color);
+            swatch.StrokeThickness = 1.5;
+        }
+    }
+
+    // A click on the label's text can hand back a Run as OriginalSource — Run is a
+    // FrameworkContentElement, not a Visual, and VisualTreeHelper.GetParent throws on anything
+    // that isn't a Visual/Visual3D. Fall back to the logical tree for those (a Run's logical
+    // parent is its owning TextBlock) so this ever reaches Grid.GetParent instead of crashing.
+    private static bool IsInsideDragExclusion(DependencyObject? d)
+    {
+        while (d is not null)
+        {
+            if (d is Button) return true;
+            if (d is FrameworkElement { Tag: { } tag } && ReferenceEquals(tag, NoDragZone)) return true;
+            d = d is Visual or System.Windows.Media.Media3D.Visual3D
+                ? VisualTreeHelper.GetParent(d)
+                : LogicalTreeHelper.GetParent(d);
+        }
+        return false;
+    }
+
+    // ---- drag lifecycle ----
+
+    private void BeginDrag(string projectId, MouseButtonEventArgs e, FrameworkElement row)
+    {
+        int from = _projects.FindIndex(x => x.Id == projectId);
+        if (from < 0 || _rowElements.Count <= 1) return;
+
+        _dragFromIndex = from;
+        _dragToIndex   = from;
+
+        var rowEl  = _rowElements[from];
+        rowEl.UpdateLayout();
+        _dragRowHeight   = rowEl.ActualHeight + rowEl.Margin.Top + rowEl.Margin.Bottom;
+        _dragCursorOffsetY = e.GetPosition(rowEl).Y;
+
+        // snapshot natural tops before any TranslateTransform is applied
+        _naturalRowTops = new double[_rowElements.Count];
+        for (int i = 0; i < _rowElements.Count; i++)
+            _naturalRowTops[i] = _rowElements[i].TransformToAncestor(ProjectsList).Transform(default).Y;
+
+        rowEl.Opacity = 0; // invisible placeholder keeps the layout slot open
+
+        var ghost = BuildGhostContent(from);
+        const double shadowPad = 12; // room for drop-shadow bleed on all sides
+        // rowEl's own ActualWidth (not ProjectsList's) — the ghost drops the Edit/Delete columns
+        // the real row reserves space for, so sizing off ProjectsList left it too narrow for the
+        // label to fit its content and it clipped mid-word instead of ellipsizing.
+        ghost.Width = rowEl.ActualWidth - shadowPad * 2;
+        // No forced Height: the ghost has its own vertical Padding (see BuildGhostContent), and
+        // pinning Height to rowEl's (which has none) left too little room inside that padding for
+        // the content — combined with ClipToBounds below, that hard-clipped text at the bottom.
+        // Auto-sizing to content avoids the mismatch entirely.
+        var ghostHost = new Border { Child = ghost, Padding = new Thickness(shadowPad) };
+        _dragGhost = new Popup
+        {
+            AllowsTransparency = true, PopupAnimation = PopupAnimation.None,
+            Placement = PlacementMode.Relative, PlacementTarget = ProjectsList, StaysOpen = true,
+            Child = ghostHost,
+        };
+        PlaceGhost(e.GetPosition(this));
+        _dragGhost.IsOpen = true;
+
+        Mouse.Capture(row);
+        row.MouseMove         += OnDragMouseMove;
+        row.MouseLeftButtonUp += OnDragMouseUp;
+        row.LostMouseCapture  += OnDragLostCapture;
+        e.Handled = true;
+    }
+
+    private void OnDragMouseMove(object sender, MouseEventArgs e)
+    {
+        if (_dragFromIndex < 0) return;
+        PlaceGhost(e.GetPosition(this));
+        int newTo = ComputeDropIndex(e.GetPosition(ProjectsList).Y);
+        if (newTo != _dragToIndex) { _dragToIndex = newTo; ApplyRowShifts(); }
+    }
+
+    private void OnDragMouseUp(object sender, MouseButtonEventArgs e)
+    {
+        UnhookHandle(sender as FrameworkElement);
+        Mouse.Capture(null);
+        CommitDrag();
+    }
+
+    private void OnDragLostCapture(object sender, MouseEventArgs e)
+    {
+        UnhookHandle(sender as FrameworkElement);
+        CommitDrag();
+    }
+
+    private void UnhookHandle(FrameworkElement? h)
+    {
+        if (h == null) return;
+        h.MouseMove         -= OnDragMouseMove;
+        h.MouseLeftButtonUp -= OnDragMouseUp;
+        h.LostMouseCapture  -= OnDragLostCapture;
+    }
+
+    // Placement is relative to ProjectsList and computed via TranslatePoint rather than
+    // PointToScreen — PointToScreen returns physical device pixels, but Popup's Horizontal/
+    // VerticalOffset are DIPs, so feeding one into the other drifted the ghost away from the
+    // cursor on any monitor not running at 100% DPI scale.
+    private void PlaceGhost(Point windowPos)
+    {
+        if (_dragGhost == null || _dragFromIndex < 0) return;
+        const double shadowPad = 12;
+        double cursorYInList = TranslatePoint(windowPos, ProjectsList).Y;
+        _dragGhost.HorizontalOffset = -shadowPad;
+        _dragGhost.VerticalOffset   = cursorYInList - _dragCursorOffsetY - shadowPad;
+    }
+
+    private int ComputeDropIndex(double cursorYInList)
+    {
+        double ghostCenter = Math.Clamp(
+            cursorYInList - _dragCursorOffsetY + _dragRowHeight / 2,
+            _naturalRowTops[0],
+            _naturalRowTops[^1] + _dragRowHeight);
+
+        for (int i = 0; i < _naturalRowTops.Length; i++)
+        {
+            if (ghostCenter < _naturalRowTops[i] + _dragRowHeight / 2)
+                return i <= _dragFromIndex ? i : i - 1;
+        }
+        return _naturalRowTops.Length - 1;
+    }
+
+    private void ApplyRowShifts()
+    {
+        int from = _dragFromIndex;
+        int to   = _dragToIndex;
+        for (int i = 0; i < _rowElements.Count; i++)
+        {
+            if (i == from) continue;  // invisible placeholder stays put
+
+            double target =
+                (to < from && i >= to && i < from) ?  _dragRowHeight :  // dragging up   → others shift down
+                (to > from && i >  from && i <= to) ? -_dragRowHeight : 0; // dragging down → others shift up
+
+            var el = _rowElements[i];
+            if (el.RenderTransform is not TranslateTransform tt)
+            {
+                tt = new TranslateTransform();
+                el.RenderTransform = tt;
+            }
+            if (Math.Abs(tt.Y - target) > 0.5)
+                tt.BeginAnimation(TranslateTransform.YProperty,
+                    new DoubleAnimation(target, TimeSpan.FromMilliseconds(180))
+                    { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
+        }
+    }
+
+    private Border BuildGhostContent(int fromIndex)
+    {
+        var p = _projects[fromIndex];
+
+        var dot = new Rectangle { Width = 12, Height = 12, RadiusX = 3, RadiusY = 3, VerticalAlignment = VerticalAlignment.Center };
+        ApplySwatchAppearance(dot, p);
+        var lbl = new TextBlock
+        {
+            FontSize = 13, Margin = new Thickness(10, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis,
+        };
+        var codeRun = new Run(p.Code);
+        codeRun.SetResourceReference(TextElement.ForegroundProperty, "Text");
+        lbl.Inlines.Add(codeRun);
+        if (!string.IsNullOrEmpty(p.Asn))
+        {
+            var asnRun = new Run($" - {p.Asn}") { FontSize = 11 };
+            asnRun.SetResourceReference(TextElement.ForegroundProperty, "TextFaint");
+            lbl.Inlines.Add(asnRun);
+        }
+
+        // ClipToBounds goes on `row`, not `border` — a Border doesn't clip its child by default
+        // even with rounded corners, so long text was bleeding straight past the shape instead
+        // of ellipsizing. Clipping `border` itself instead would also crop the DropShadowEffect
+        // below, right back to the sharp edge shadowPad exists to avoid.
+        var row = new Grid { ClipToBounds = true };
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        Grid.SetColumn(dot, 0); Grid.SetColumn(lbl, 1);
+        row.Children.Add(dot); row.Children.Add(lbl);
+
+        var border = new Border
+        {
+            Child = row, Padding = new Thickness(8, 6, 8, 6),
+            CornerRadius = new CornerRadius(8), BorderThickness = new Thickness(1.5),
+        };
+        border.SetResourceReference(Border.BackgroundProperty,   "Surface2");
+        border.SetResourceReference(Border.BorderBrushProperty,  "Accent");
+        border.Effect = new System.Windows.Media.Effects.DropShadowEffect
+        { BlurRadius = 14, ShadowDepth = 3, Opacity = 0.28, Color = Colors.Black };
+        // AllowsTransparency on the host Popup disables ClearType for its content by default;
+        // this hints it back on since the ghost always sits over its own opaque background.
+        RenderOptions.SetClearTypeHint(border, ClearTypeHint.Enabled);
+        return border;
+    }
+
+    private void CommitDrag()
+    {
+        int from = _dragFromIndex;
+        int to   = _dragToIndex;
+        CleanUpDrag();
+
+        if (from >= 0 && to >= 0 && to != from)
+        {
+            var proj = _projects[from];
+            _projects.RemoveAt(from);
+            _projects.Insert(to, proj);
+            for (int i = 0; i < _projects.Count; i++) _projects[i].Order = i;
+            RebuildProjectRows();
+            A.Tracker.UpdateProjects(_projects);
+        }
+        else if (from >= 0 && from < _rowElements.Count)
+        {
+            // no move — restore opacity and animate shifts back to zero
+            _rowElements[from].Opacity = 1;
+            foreach (var el in _rowElements)
+                if (el.RenderTransform is TranslateTransform tt)
+                    tt.BeginAnimation(TranslateTransform.YProperty,
+                        new DoubleAnimation(0, TimeSpan.FromMilliseconds(150))
+                        { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
+        }
+    }
+
+    private void CleanUpDrag()
+    {
+        if (_dragGhost is { IsOpen: true }) _dragGhost.IsOpen = false;
+        _dragGhost     = null;
+        _dragFromIndex = -1;
+        _dragToIndex   = -1;
     }
 
     private void AddProject_Click(object sender, RoutedEventArgs e)
     {
         var p = AddProjectDialog.Ask(this, _projects);
-        if (p is not null) { _projects.Add(p); RebuildProjectRows(); }
-    }
-
-    // ================= IFS mapping =================
-
-    private void RebuildMappingRows()
-    {
-        MappingList.Items.Clear();
-        foreach (var m in _mapping)
-            MappingList.Items.Add(BuildMappingRow(m));
-    }
-
-    private UIElement BuildMappingRow(MappingEntry m)
-    {
-        var grid = new Grid { Margin = new Thickness(0, 3, 0, 3) };
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-
-        var headerBox = new TextBox { Text = m.Header, Style = (Style)FindResource("Input"), FontSize = 12 };
-        headerBox.TextChanged += (_, _) => m.Header = headerBox.Text;
-        Grid.SetColumn(headerBox, 0);
-
-        var arrow = new TextBlock { Text = "←", Margin = new Thickness(6, 0, 6, 0), VerticalAlignment = VerticalAlignment.Center, Foreground = (Brush)FindResource("TextFaint") };
-        Grid.SetColumn(arrow, 1);
-
-        var fieldBox = new TextBox { Text = m.Field, Style = (Style)FindResource("Input"), FontSize = 12 };
-        fieldBox.TextChanged += (_, _) => m.Field = fieldBox.Text;
-        Grid.SetColumn(fieldBox, 2);
-
-        var delBtn = new Button { Content = "✕", Style = (Style)FindResource("Btn"), FontSize = 11, Padding = new Thickness(8, 3, 8, 3), Margin = new Thickness(6, 0, 0, 0) };
-        delBtn.Click += (_, _) => { _mapping.Remove(m); RebuildMappingRows(); };
-        Grid.SetColumn(delBtn, 3);
-
-        grid.Children.Add(headerBox);
-        grid.Children.Add(arrow);
-        grid.Children.Add(fieldBox);
-        grid.Children.Add(delBtn);
-        return grid;
-    }
-
-    private void AddMapping_Click(object sender, RoutedEventArgs e)
-    {
-        _mapping.Add(new MappingEntry { Header = "Column", Field = "ProjectCode" });
-        RebuildMappingRows();
-    }
-
-    // ================= export =================
-
-    private void RefreshMonthLabel() => MonthLabel.Text = _exportMonth.ToString("MMMM yyyy");
-    private void PrevMonth_Click(object sender, RoutedEventArgs e) { _exportMonth = _exportMonth.AddMonths(-1); RefreshMonthLabel(); }
-    private void NextMonth_Click(object sender, RoutedEventArgs e) { _exportMonth = _exportMonth.AddMonths(1); RefreshMonthLabel(); }
-
-    private void Export_Click(object sender, RoutedEventArgs e)
-    {
-        SaveToSettings(); // export uses current mapping/date-format
-        var path = A.Exporter.ExportMonth(_exportMonth.Year, _exportMonth.Month, A.Settings);
-        ExportResultText.Text = $"Exported to: {path}";
-        ExportResultText.Visibility = Visibility.Visible;
+        if (p is not null) { _projects.Add(p); RebuildProjectRows(); A.Tracker.UpdateProjects(_projects); }
     }
 
     private void OpenFolder_Click(object sender, RoutedEventArgs e)
@@ -284,107 +567,39 @@ public partial class SettingsWindow : Window
             DataOverrideBox.Text = dlg.SelectedPath;
     }
 
-    // ================= save/close =================
+    // ================= close =================
 
-    private void SaveToSettings()
+    // wa.WorkingArea comes back in physical device pixels; Left/Top/ActualWidth are DIPs.
+    // Route through CompositionTarget's device<->DIP matrix (same pattern as
+    // PillWindow.WorkArea()) instead of mixing the two directly, which misplaced/clipped the
+    // window on scaled monitors.
+    private void PositionNextToOwner()
     {
-        var s = A.Settings;
-        s.PromptForNote = _promptNoteToggle.IsOn;
-        s.StartMinimized = _startMinimizedToggle.IsOn;
-        s.DataFolderOverride = string.IsNullOrWhiteSpace(DataOverrideBox.Text) ? null : DataOverrideBox.Text.Trim();
-        if (int.TryParse(IdleBox.Text, out var mins) && mins > 0) s.IdleThresholdMinutes = mins;
-        s.ExportDateFormat = string.IsNullOrWhiteSpace(DateFormatBox.Text) ? s.ExportDateFormat : DateFormatBox.Text;
-        s.IfsExportMapping = _mapping.Where(m => !string.IsNullOrWhiteSpace(m.Header)).ToList();
-        A.Store.SaveSettings(s);
-        A.RefreshIdleThreshold();
+        if (Owner is not Window owner) return;
+        const double gap = 8;
 
-        A.Tracker.UpdateProjects(_projects);
-        A.SetPillVisible(_showPillToggle.IsOn);
-        A.SetTrayIconVisible(_showTrayToggle.IsOn);
-        StartupRegistration.SetEnabled(_startWithWindowsToggle.IsOn);
+        var ownerHandle = new System.Windows.Interop.WindowInteropHelper(owner).Handle;
+        var wa = System.Windows.Forms.Screen.FromHandle(ownerHandle).WorkingArea;
+
+        var toDip = PresentationSource.FromVisual(this)?.CompositionTarget?.TransformFromDevice ?? Matrix.Identity;
+        var waTopLeft     = toDip.Transform(new Point(wa.Left, wa.Top));
+        var waBottomRight = toDip.Transform(new Point(wa.Right, wa.Bottom));
+
+        double left = owner.Left + owner.ActualWidth + gap;
+        double top  = owner.Top;
+        if (left + ActualWidth > waBottomRight.X)
+            left = owner.Left - ActualWidth - gap;
+
+        Left = Math.Max(waTopLeft.X, left);
+        Top  = Math.Max(waTopLeft.Y, Math.Min(top, waBottomRight.Y - ActualHeight));
     }
 
-    private void Save_Click(object sender, RoutedEventArgs e) { _closingConfirmed = true; SaveToSettings(); Close(); }
     private void Close_Click(object sender, RoutedEventArgs e) => Close();
 
-    // Goes through the same Close() -> OnClosing unsaved-changes guard as the ✕ button (rather
-    // than forcing _closingConfirmed = true) — starting the tour isn't an explicit "discard my
-    // edits" action, so any pending changes still get the normal save/discard/cancel prompt.
-    // Close() is synchronous: if OnClosing cancels it, the window is still IsVisible when it
-    // returns, so that's the signal the tour should NOT start after all.
     private void StartTutorial_Click(object sender, RoutedEventArgs e)
     {
         Close();
-        if (!IsVisible) A.StartTutorial();
+        A.StartTutorial();
     }
     private void TitleBar_Drag(object sender, MouseButtonEventArgs e) { if (e.ChangedButton == MouseButton.Left) DragMove(); }
-
-    // ================= unsaved-changes guard =================
-
-    protected override void OnClosing(CancelEventArgs e)
-    {
-        // Resolve the outcome and set e.Cancel (at most) once for THIS close pass, rather than
-        // cancelling it and then calling Close() again from inside the handler — a recursive
-        // Close() while still inside this window's own Closing callback re-enters WPF's closing
-        // machinery on the same window and crashed instead of throwing anything catchable.
-        if (!_closingConfirmed && HasUnsavedChanges())
-        {
-            switch (UnsavedChangesPrompt.Ask(this))
-            {
-                case UnsavedChangesResult.Save:
-                    SaveToSettings();
-                    _closingConfirmed = true;
-                    break;
-                case UnsavedChangesResult.Discard:
-                    _closingConfirmed = true;
-                    break;
-                case UnsavedChangesResult.Cancel:
-                default:
-                    e.Cancel = true;
-                    break;
-            }
-        }
-
-        base.OnClosing(e);
-    }
-
-    private bool HasUnsavedChanges()
-    {
-        var s = A.Settings;
-        if (_promptNoteToggle.IsOn != s.PromptForNote) return true;
-        if (_showPillToggle.IsOn != s.PillVisible) return true;
-        if (_showTrayToggle.IsOn != s.ShowTrayIcon) return true;
-        if (_startMinimizedToggle.IsOn != s.StartMinimized) return true;
-        if (_startWithWindowsToggle.IsOn != StartupRegistration.IsEnabled()) return true;
-        if (int.TryParse(IdleBox.Text, out var mins) && mins > 0 && mins != s.IdleThresholdMinutes) return true;
-        if (DateFormatBox.Text != s.ExportDateFormat) return true;
-
-        var overrideText = string.IsNullOrWhiteSpace(DataOverrideBox.Text) ? null : DataOverrideBox.Text.Trim();
-        if (overrideText != s.DataFolderOverride) return true;
-
-        if (!ProjectsEqual(_projects, A.Tracker.Projects)) return true;
-        if (!MappingEqual(_mapping, s.IfsExportMapping)) return true;
-
-        return false;
-    }
-
-    private static bool ProjectsEqual(IReadOnlyList<Project> a, IReadOnlyList<Project> b)
-    {
-        if (a.Count != b.Count) return false;
-        for (int i = 0; i < a.Count; i++)
-        {
-            var x = a[i]; var y = b[i];
-            if (x.Code != y.Code || x.Asn != y.Asn || x.Name != y.Name || x.Color != y.Color || x.Order != y.Order)
-                return false;
-        }
-        return true;
-    }
-
-    private static bool MappingEqual(IReadOnlyList<MappingEntry> a, IReadOnlyList<MappingEntry> b)
-    {
-        if (a.Count != b.Count) return false;
-        for (int i = 0; i < a.Count; i++)
-            if (a[i].Header != b[i].Header || a[i].Field != b[i].Field) return false;
-        return true;
-    }
 }

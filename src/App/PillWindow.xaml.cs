@@ -171,7 +171,7 @@ public partial class PillWindow : Window
         StartTween(targetLeft, targetTop, targetWidth, ms, () => A.Tracker.SavePillPosition(Left, Top));
     }
 
-    private void Pill_RightClick(object sender, MouseButtonEventArgs e) => A.ShowMainWindow();
+    private void Pill_RightClick(object sender, MouseButtonEventArgs e) => A.ShowMainOrTimesheets();
 
     // ---------------- drag ----------------
 
@@ -179,7 +179,7 @@ public partial class PillWindow : Window
     {
         if (ReferenceEquals(e.OriginalSource, Dot) || ToggleBtn.IsMouseOver) return;
 
-        if (e.ClickCount == 2) { A.ShowMainWindow(); return; } // double-click opens the app
+        if (e.ClickCount == 2) { A.ShowMainOrTimesheets(); return; } // double-click opens the app (or the timesheet view, if that's what's open)
 
         StopAnim();
         _dragging = true; _moved = false;

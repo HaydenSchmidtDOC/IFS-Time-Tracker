@@ -136,6 +136,18 @@ public partial class App : Application
 
         UpdateTray();
         if (!Settings.StartMinimized) ShowMainWindow();
+        // StartMinimized + MinimizeAppOnly together: still show the window, just minimised —
+        // so it lands on the taskbar with a click-to-restore path — rather than skipping Show()
+        // entirely (which leaves no taskbar entry at all, only reachable via pill/tray). See both
+        // settings' own remarks. WindowState is set BEFORE Show() — set the other way around,
+        // Show() briefly draws the window centred at full size first and only minimises it a
+        // frame later, flashing on screen for an instant; setting it first makes the window go
+        // straight from nothing to minimised.
+        else if (Settings.MinimizeAppOnly)
+        {
+            _main.WindowState = WindowState.Minimized;
+            _main.Show();
+        }
 
         // Exactly once per install (a fresh one has no settings.json at all, so this defaults to
         // false — see OnboardingPromptShown's own remarks). Flipped true the moment the prompt is
@@ -307,10 +319,10 @@ public partial class App : Application
             Text = "IFS Time Tracker",
             Visible = Settings.ShowTrayIcon,
         };
-        _tray.DoubleClick += (_, _) => ShowMainWindow();
+        _tray.DoubleClick += (_, _) => ShowMainOrTimesheets();
 
         var menu = new WinForms.ContextMenuStrip();
-        menu.Items.Add("Open", null, (_, _) => ShowMainWindow());
+        menu.Items.Add("Open", null, (_, _) => ShowMainOrTimesheets());
         menu.Items.Add("Switch project…", null, (_, _) => OpenSwitcher());
         menu.Items.Add(new WinForms.ToolStripSeparator());
         menu.Items.Add("Stop", null, (_, _) => StopWithPrompt());
@@ -367,6 +379,26 @@ public partial class App : Application
         if (_main.WindowState == WindowState.Minimized) _main.WindowState = WindowState.Normal;
         _main.Activate();
         _main.Topmost = true; _main.Topmost = false;
+    }
+
+    /// <summary>Entry point for the pill's double-click/right-click and the tray icon's
+    /// double-click/"Open" — the main window and the timesheet window are meant to never be open
+    /// at the same time (see OpenTimesheets/CloseTimesheets), so this brings whichever of the two
+    /// is already the active surface forward instead of unconditionally showing the main window,
+    /// which would otherwise pop it up on top of an open timesheet view that's then left stranded
+    /// behind it (and re-clicking "Timesheets" in the main window just re-activates the same
+    /// already-visible timesheet window instead of doing anything visible).</summary>
+    public void ShowMainOrTimesheets()
+    {
+        if (_timesheets is { IsVisible: true } ts)
+        {
+            ts.Show();
+            if (ts.WindowState == WindowState.Minimized) ts.WindowState = WindowState.Normal;
+            ts.Activate();
+            ts.Topmost = true; ts.Topmost = false;
+            return;
+        }
+        ShowMainWindow();
     }
 
     /// <summary>Start or switch to a project, prompting for a note on any block being ended.</summary>
@@ -453,12 +485,12 @@ public partial class App : Application
         _main.Left = mainLeft;
         _main.Top = mainTop;
 
-        ts.AnimateCloseTo(_main, () =>
-        {
-            _main.Show();
-            if (_main.WindowState == WindowState.Minimized) _main.WindowState = WindowState.Normal;
-            _main.Activate();
-        });
+        // ShowMainWindow (not a hand-rolled Show/Activate here) — its trailing Topmost toggle is
+        // what actually forces real OS focus onto _main rather than just raising it in z-order.
+        // Duplicating its first three lines without that toggle (as this used to) left _main
+        // LOOKING frontmost while the OS still considered something else active, so the window
+        // needed an extra click before it would accept keyboard input.
+        ts.AnimateCloseTo(_main, ShowMainWindow);
     }
 
     private void OnIdleEnded(DateTime idleStartUtc)
@@ -486,6 +518,34 @@ public partial class App : Application
         Settings.ShowTrayIcon = visible;
         Store.SaveSettings(Settings);
         _tray.Visible = visible;
+    }
+
+    /// <summary>Show or hide each project's ASN in the main window's list and persist the
+    /// preference. Routed through StateChanged (rather than touching MainWindow directly) since
+    /// that's the same signal MainWindow already rebuilds its rows from.</summary>
+    public void SetShowAsnInMainList(bool visible)
+    {
+        Settings.ShowAsnInMainList = visible;
+        Store.SaveSettings(Settings);
+        StateChanged?.Invoke();
+    }
+
+    /// <summary>Toggle milliseconds on the main window's timer and persist the preference.</summary>
+    public void SetShowTimerMilliseconds(bool show)
+    {
+        Settings.ShowTimerMilliseconds = show;
+        Store.SaveSettings(Settings);
+        StateChanged?.Invoke();
+    }
+
+    /// <summary>Toggle the main window's title-bar close button and persist the preference.
+    /// Routed through StateChanged the same way SetShowAsnInMainList is — that's what
+    /// MainWindow's own SyncCloseButtonVisibility already listens for.</summary>
+    public void SetMinimizeAppOnly(bool on)
+    {
+        Settings.MinimizeAppOnly = on;
+        Store.SaveSettings(Settings);
+        StateChanged?.Invoke();
     }
 
     public void QuitApp()

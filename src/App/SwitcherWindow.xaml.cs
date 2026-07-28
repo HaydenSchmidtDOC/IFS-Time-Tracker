@@ -20,7 +20,7 @@ public partial class SwitcherWindow : Window
     public SwitcherWindow()
     {
         InitializeComponent();
-        foreach (var p in A.Tracker.Projects) _rows.Add(new SwitchRow(p));
+        foreach (var p in A.Tracker.Projects.Where(p => p.Enabled)) _rows.Add(new SwitchRow(p));
         List.ItemsSource = _rows;
 
         // Start highlighted on the live project (or the first project).
@@ -118,7 +118,7 @@ public sealed class SwitchRow : INotifyPropertyChanged
     public Project Project { get; }
     public string Id => Project.Id;
     public string Code => Project.Code;
-    public string AsnText => $"ASN {Project.Asn}";
+    public string AsnText => Project.Asn;
     public Brush Swatch { get; }
     public Visibility LiveVisibility =>
         App.Current.Tracker.IsRunning && App.Current.Tracker.Active?.Id == Id

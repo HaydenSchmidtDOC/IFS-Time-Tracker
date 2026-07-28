@@ -144,7 +144,11 @@ public partial class TimesheetWindow : Window
         UpdateMergeToggleVisibility(animate: false);
 
         SourceInitialized += (_, _) =>
-            DarkTitleBar.Apply(new WindowInteropHelper(this).Handle, !A.IsLightTheme);
+        {
+            var hwnd = new WindowInteropHelper(this).Handle;
+            DarkTitleBar.Apply(hwnd, !A.IsLightTheme);
+            TaskbarMinimizeFix.Apply(hwnd);
+        };
         PreviewKeyDown += Window_PreviewKeyDown;
         // TimesheetSettingsPopup is StaysOpen="True" now (see its XAML remarks) — WPF no longer
         // auto-closes it on deactivation the way a StaysOpen="False" popup would (e.g. opening
@@ -328,6 +332,11 @@ public partial class TimesheetWindow : Window
 
         Show();
         Activate();
+        // Activate() alone can leave this window looking frontmost while the OS still treats
+        // something else (main, which Show() here doesn't reliably outrun) as active — the same
+        // issue App.ShowMainWindow works around with this same toggle; see CloseTimesheets'
+        // remarks for the fuller explanation.
+        Topmost = true; Topmost = false;
 
         var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
         ChartArea.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(180)));
@@ -356,11 +365,18 @@ public partial class TimesheetWindow : Window
         var fadeOut = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(160)) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseIn } };
         fadeOut.Completed += (_, _) =>
         {
+            // onDone (App.CloseTimesheets) shows the main window BEFORE this one hides — mirrors
+            // AnimateOpenFrom, which shows the new window before hiding the old one. Both this
+            // window and the main window are ShowInTaskbar="True" (so the app always has a
+            // taskbar presence even while main is hidden behind the timesheet view), which means
+            // hiding first and showing second — the order this used to run in — left a brief gap
+            // with NEITHER window shown, long enough for the taskbar button to visibly disappear
+            // and reappear, like the app had relaunched. Overlapping the two removes that gap.
+            onDone();
             Hide();
             // Reset so the next AnimateOpenFrom starts clean.
             ChartArea.Opacity = 1;
             ScaleXform.ScaleX = 1; ScaleXform.ScaleY = 1;
-            onDone();
         };
         ChartArea.BeginAnimation(OpacityProperty, fadeOut);
         var shrinkEase = new CubicEase { EasingMode = EasingMode.EaseIn };
@@ -422,7 +438,8 @@ public partial class TimesheetWindow : Window
 
     private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key == Key.Left) { Navigate(-1); e.Handled = true; }
+        if (e.Key == Key.Escape && TimesheetSettingsPopup.IsOpen) { TimesheetSettingsPopup.IsOpen = false; e.Handled = true; }
+        else if (e.Key == Key.Left) { Navigate(-1); e.Handled = true; }
         else if (e.Key == Key.Right) { Navigate(1); e.Handled = true; }
     }
 

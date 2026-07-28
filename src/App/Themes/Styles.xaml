@@ -3,6 +3,10 @@
 
     <FontFamily x:Key="UiFont">Segoe UI Variable Text, Segoe UI</FontFamily>
     <FontFamily x:Key="MonoFont">Cascadia Mono, Consolas</FontFamily>
+    <!-- Cascadia Mono's dotted zero (there to distinguish 0 from O in code) reads oddly blown up
+         at the main window's big clock size — Consolas keeps a plain zero and still lines digits
+         up evenly as the timer ticks. -->
+    <FontFamily x:Key="TimerFont">Consolas</FontFamily>
 
     <!-- Single hue slider: a rainbow track + a plain round thumb. Saturation/Lightness are left
          to whoever hosts this (fixed constants in code-behind) — deliberately no brightness/

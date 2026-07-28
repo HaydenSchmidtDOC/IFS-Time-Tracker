@@ -26,7 +26,7 @@
                                FontSize="12.5" FontWeight="SemiBold" Foreground="{DynamicResource TextDim}"/>
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                         <Button Content="—" Click="Minimize_Click" Style="{StaticResource IconBtn}" FontSize="13"/>
-                        <Button Content="✕" Click="HideToTray_Click" Style="{StaticResource IconBtn}" FontSize="12"/>
+                        <Button x:Name="CloseBtn" Content="✕" Click="HideToTray_Click" Style="{StaticResource IconBtn}" FontSize="12"/>
                     </StackPanel>
                 </Grid>
             </Border>
@@ -49,7 +49,7 @@
                             <Border x:Name="RecBadge" Margin="8,0,0,0" Padding="5,1" CornerRadius="4"
                                     BorderThickness="1" BorderBrush="{DynamicResource Live}" Visibility="Collapsed"
                                     VerticalAlignment="Center">
-                                <TextBlock Text="REC" FontSize="9" FontWeight="Bold" Foreground="{DynamicResource Live}"/>
+                                <TextBlock Text="LIVE" FontSize="9" FontWeight="Bold" Foreground="{DynamicResource Live}"/>
                             </Border>
                         </StackPanel>
                         <TextBlock x:Name="LiveAsn" Text="Select a project to begin" FontSize="12"
@@ -72,7 +72,7 @@
                     </Button>
                 </Grid>
 
-                <TextBlock x:Name="TimerText" Text="00:00:00" FontFamily="{StaticResource MonoFont}"
+                <TextBlock x:Name="TimerText" Text="00:00:00" FontFamily="{StaticResource TimerFont}"
                            FontSize="30" FontWeight="SemiBold" Foreground="{DynamicResource Text}"
                            Margin="0,14,0,0"/>
                 <TextBlock x:Name="HintText" FontSize="11" Foreground="{DynamicResource TextFaint}"
@@ -144,9 +144,29 @@
                                 </Grid.ColumnDefinitions>
                                 <Rectangle Grid.Column="0" Width="11" Height="11" RadiusX="3" RadiusY="3"
                                            Fill="{Binding Swatch}" VerticalAlignment="Center"/>
-                                <TextBlock Grid.Column="1" Text="{Binding Code}" Margin="10,0,0,0"
-                                           FontSize="13.5" FontWeight="Medium" VerticalAlignment="Center"
-                                           Foreground="{DynamicResource Text}"/>
+                                <!-- ClipToBounds + the OpacityMask below fade the title/ASN into
+                                     nothing right at the edge of the Star column instead of a
+                                     hard cut. Background="Transparent" matters here: without an
+                                     actual painted brush, WPF sizes a RelativeToBoundingBox mask
+                                     to the CONTENT's own tight bounds rather than the Border's
+                                     full stretched width, which faded even short titles that
+                                     were nowhere near the column edge. -->
+                                <Border Grid.Column="1" Margin="10,0,0,0" ClipToBounds="True"
+                                        Background="Transparent" VerticalAlignment="Center">
+                                    <Border.OpacityMask>
+                                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                            <GradientStop Color="#FFFFFFFF" Offset="0"/>
+                                            <GradientStop Color="#FFFFFFFF" Offset="0.93"/>
+                                            <GradientStop Color="#00FFFFFF" Offset="1"/>
+                                        </LinearGradientBrush>
+                                    </Border.OpacityMask>
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="{Binding Code}" FontSize="13.5" FontWeight="Medium"
+                                                   VerticalAlignment="Center" Foreground="{DynamicResource Text}"/>
+                                        <TextBlock Text="{Binding AsnDisplay}" FontSize="11" FontWeight="Medium"
+                                                   VerticalAlignment="Center" Foreground="{DynamicResource TextFaint}"/>
+                                    </StackPanel>
+                                </Border>
                                 <Border Grid.Column="2" Visibility="{Binding LiveVisibility}" Margin="0,0,8,0"
                                         Padding="5,1" CornerRadius="4" BorderThickness="1"
                                         BorderBrush="{DynamicResource Live}" VerticalAlignment="Center">

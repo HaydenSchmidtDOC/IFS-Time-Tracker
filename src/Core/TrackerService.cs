@@ -144,6 +144,19 @@ public sealed class TrackerService
         }
     }
 
+    /// <summary>Elapsed time of the current running block with sub-second precision (Zero when
+    /// stopped) — for the optional milliseconds display, which needs finer grain than
+    /// <see cref="CurrentElapsedSeconds"/> gives.</summary>
+    public TimeSpan CurrentElapsed
+    {
+        get
+        {
+            if (_state.BlockStartUtc is not DateTime start) return TimeSpan.Zero;
+            var elapsed = _utcNow() - start;
+            return elapsed < TimeSpan.Zero ? TimeSpan.Zero : elapsed;
+        }
+    }
+
     /// <summary>Begin tracking a project. Auto-banks any running block first (with optional
     /// note). Refuses (raising <see cref="StartRefused"/> instead) if "now" already falls inside
     /// an existing committed block for today — starting anyway would immediately overlap it.</summary>

@@ -4,6 +4,10 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
+using System.Windows.Threading;
+using System.Windows.Interop;
+using TimeTracker.App.Interop;
 using TimeTracker.App.UI;
 using TimeTracker.Core;
 
@@ -16,37 +20,224 @@ public partial class MainWindow : Window
 
     private static App A => App.Current;
 
+    // Only runs while tracking AND the milliseconds setting is on — the shared 1s Tick isn't
+    // fast enough to look like a running stopwatch, but ticking this fast unconditionally would
+    // burn cycles for the common case where nobody wants sub-second display.
+    private DispatcherTimer? _msTimer;
+
     public MainWindow()
     {
         InitializeComponent();
         ProjectList.ItemsSource = _rows;
 
+        SourceInitialized += (_, _) => TaskbarMinimizeFix.Apply(new WindowInteropHelper(this).Handle);
+
         Rebuild();
         UpdateLive();
+        SyncMsTimer();
+        SyncCloseButtonVisibility();
 
         A.Tick += OnTick;
         A.StateChanged += OnStateChanged;
     }
 
     private void OnTick() => UpdateLive();
-    private void OnStateChanged() { Rebuild(); UpdateLive(); }
+    private void OnStateChanged() { Rebuild(); UpdateLive(); SyncMsTimer(); SyncCloseButtonVisibility(); }
 
-    /// <summary>Sync the row list to the current projects, preserving selection by id (stable
-    /// across a rename, unlike Code).</summary>
+    /// <summary>Hides the ✕ button per Settings.MinimizeAppOnly — see its own remarks for why.
+    /// Minimize is always left in place, so there's still a one-click way to get the window out
+    /// of the way that isn't this.</summary>
+    private void SyncCloseButtonVisibility()
+        => CloseBtn.Visibility = A.Settings.MinimizeAppOnly ? Visibility.Collapsed : Visibility.Visible;
+
+    private void SyncMsTimer()
+    {
+        bool shouldRun = A.Tracker.IsRunning && A.Settings.ShowTimerMilliseconds;
+        if (shouldRun && _msTimer is null)
+        {
+            _msTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(50) };
+            _msTimer.Tick += (_, _) => { if (A.Tracker.IsRunning) TimerText.Text = FormatTimer(A.Tracker.CurrentElapsed); };
+            _msTimer.Start();
+        }
+        else if (!shouldRun && _msTimer is not null)
+        {
+            _msTimer.Stop();
+            _msTimer = null;
+        }
+    }
+
+    private static string FormatTimer(TimeSpan elapsed) =>
+        elapsed.ToString(A.Settings.ShowTimerMilliseconds ? @"hh\:mm\:ss\.ff" : @"hh\:mm\:ss");
+
+    /// <summary>Sync the row list to the current projects, preserving selection by id. When
+    /// only the display order changed (pure reorder from settings drag), items are moved rather
+    /// than cleared and re-added so WPF keeps their containers alive and can animate them.</summary>
     private void Rebuild()
     {
         var selectedId = (ProjectList.SelectedItem as ProjectRow)?.Id;
+        var newProjects = A.Tracker.Projects.Where(p => p.Enabled).ToList();
+        var currentIds = _rows.Select(r => r.Id).ToList();
+        var newIds = newProjects.Select(p => p.Id).ToList();
+
+        // Pure reorder: same set of IDs, different sequence — animate the moves.
+        bool sameSet = currentIds.Count == newIds.Count && currentIds.ToHashSet().SetEquals(newIds);
+        if (sameSet && !currentIds.SequenceEqual(newIds))
+        {
+            AnimateReorder(newIds, selectedId);
+            return;
+        }
+
+        // A single project being enabled/disabled (or added/deleted outright) is the common
+        // case — collapse/expand that one row instead of a hard cut. Anything messier (first
+        // load, or several projects changing at once) falls through to the plain rebuild below.
+        var removedIds = currentIds.Except(newIds).ToList();
+        var addedIds   = newIds.Except(currentIds).ToList();
+        if (currentIds.Count > 0 && removedIds.Count == 1 && addedIds.Count == 0)
+        {
+            AnimateRemove(removedIds[0]);
+            return;
+        }
+        if (addedIds.Count == 1 && removedIds.Count == 0)
+        {
+            AnimateAdd(newProjects, addedIds[0], selectedId);
+            return;
+        }
+
+        // Full rebuild (first load, multi-item change, or a data edit).
         _rows.Clear();
-        foreach (var p in A.Tracker.Projects)
+        foreach (var p in newProjects)
             _rows.Add(new ProjectRow(p));
 
         EmptyHint.Visibility = _rows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
 
-        // Whatever is actually live takes priority — e.g. switching projects via the quick
-        // switcher or the pill should be reflected here too, not leave the old selection
-        // sitting stale. Only fall back to the prior selection (or none at all) once nothing
-        // is running; a fresh boot with nothing active shouldn't auto-pick an arbitrary
-        // project just to have something selected.
+        var restore = _rows.FirstOrDefault(r => r.Id == A.Tracker.Active?.Id)
+                      ?? _rows.FirstOrDefault(r => r.Id == selectedId);
+        ProjectList.SelectedItem = restore;
+    }
+
+    /// <summary>Collapses the row's container (height + opacity to zero) and only then removes
+    /// it from _rows, so SizeToContent shrinks the window smoothly frame-by-frame alongside the
+    /// animation instead of jumping straight to the final size.</summary>
+    private void AnimateRemove(string id)
+    {
+        var row = _rows.FirstOrDefault(r => r.Id == id);
+        if (row is null) return;
+
+        if (ProjectList.ItemContainerGenerator.ContainerFromItem(row) is not ListBoxItem container)
+        {
+            _rows.Remove(row);
+            EmptyHint.Visibility = _rows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+            return;
+        }
+
+        double from = container.ActualHeight;
+        var duration = TimeSpan.FromMilliseconds(180);
+
+        // Explicit From on both — BeginAnimation falls back to the property's current BASE value
+        // as an implicit From when none is given, and Height's base value is NaN ("Auto") until
+        // something sets it. That's the exact "DoubleAnimation cannot use default origin value of
+        // 'NaN'" crash: setting container.Height beforehand didn't reliably count as that base
+        // value in every case, so give the animation its own From and skip the base value entirely.
+        var heightAnim = new DoubleAnimation(from, 0, duration) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseIn } };
+        heightAnim.Completed += (_, _) =>
+        {
+            _rows.Remove(row);
+            EmptyHint.Visibility = _rows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        };
+        container.BeginAnimation(FrameworkElement.HeightProperty, heightAnim);
+        container.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(1, 0, duration));
+    }
+
+    /// <summary>Inserts the new row at its target index immediately (so selection/layout is
+    /// correct right away) then grows its container from zero height/opacity once the layout
+    /// pass has resolved its natural size.</summary>
+    private void AnimateAdd(List<Project> newProjects, string addedId, string? selectedId)
+    {
+        var project = newProjects.First(p => p.Id == addedId);
+        int index = newProjects.FindIndex(p => p.Id == addedId);
+        var row = new ProjectRow(project);
+        _rows.Insert(Math.Min(index, _rows.Count), row);
+        EmptyHint.Visibility = Visibility.Collapsed;
+
+        var restore = _rows.FirstOrDefault(r => r.Id == A.Tracker.Active?.Id)
+                      ?? _rows.FirstOrDefault(r => r.Id == selectedId) ?? row;
+        ProjectList.SelectedItem = restore;
+
+        // LayoutUpdated, not a fixed-priority Dispatcher callback — it fires synchronously as
+        // part of the very layout pass that generates the new container, before that pass is
+        // composited to screen. DispatcherPriority.Loaded runs AFTER Render, so the container was
+        // already painted once at its natural height/full opacity before this got a chance to
+        // zero it out — that stray frame was the visible "shows up, then disappears to animate
+        // back in" flash.
+        EventHandler? onLayoutUpdated = null;
+        onLayoutUpdated = (_, _) =>
+        {
+            if (ProjectList.ItemContainerGenerator.ContainerFromItem(row) is not ListBoxItem container) return;
+            ProjectList.LayoutUpdated -= onLayoutUpdated;
+
+            double natural = container.ActualHeight;
+            container.Height = 0;
+            container.Opacity = 0;
+
+            var duration = TimeSpan.FromMilliseconds(180);
+            var heightAnim = new DoubleAnimation(0, natural, duration) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } };
+            // Release back to Auto once grown, so later layout passes aren't pinned to this value.
+            heightAnim.Completed += (_, _) => container.ClearValue(FrameworkElement.HeightProperty);
+            container.BeginAnimation(FrameworkElement.HeightProperty, heightAnim);
+            container.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(0, 1, duration));
+        };
+        ProjectList.LayoutUpdated += onLayoutUpdated;
+    }
+
+    /// <summary>Applies a reorder by calling ObservableCollection.Move() (preserves containers,
+    /// no flicker) then after the layout pass animates each container from its old screen Y to
+    /// its new one via a TranslateTransform slide.</summary>
+    private void AnimateReorder(List<string> newIds, string? selectedId)
+    {
+        // Snapshot current Y positions before any moves.
+        var positions = new Dictionary<string, double>();
+        for (int i = 0; i < _rows.Count; i++)
+        {
+            if (ProjectList.ItemContainerGenerator.ContainerFromIndex(i) is FrameworkElement el)
+                positions[_rows[i].Id] = el.TransformToAncestor(ProjectList).Transform(new Point(0, 0)).Y;
+        }
+
+        // Apply the new order using Move() so containers stay alive.
+        for (int target = 0; target < newIds.Count; target++)
+        {
+            for (int current = target; current < _rows.Count; current++)
+            {
+                if (_rows[current].Id == newIds[target])
+                {
+                    if (current != target) _rows.Move(current, target);
+                    break;
+                }
+            }
+        }
+
+        // After the layout pass resolves the new positions, slide each container from
+        // where it was to where it now is.
+        Dispatcher.InvokeAsync(() =>
+        {
+            for (int i = 0; i < _rows.Count; i++)
+            {
+                if (ProjectList.ItemContainerGenerator.ContainerFromIndex(i) is not FrameworkElement el) continue;
+                if (!positions.TryGetValue(_rows[i].Id, out var oldY)) continue;
+
+                double newY = el.TransformToAncestor(ProjectList).Transform(new Point(0, 0)).Y;
+                double deltaY = oldY - newY;
+                if (Math.Abs(deltaY) < 0.5) continue;
+
+                var tt = new TranslateTransform(0, deltaY);
+                el.RenderTransform = tt;
+                tt.BeginAnimation(TranslateTransform.YProperty,
+                    new DoubleAnimation(deltaY, 0, TimeSpan.FromMilliseconds(220))
+                    {
+                        EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+                    });
+            }
+        }, DispatcherPriority.Loaded);
+
         var restore = _rows.FirstOrDefault(r => r.Id == A.Tracker.Active?.Id)
                       ?? _rows.FirstOrDefault(r => r.Id == selectedId);
         ProjectList.SelectedItem = restore;
@@ -68,7 +259,7 @@ public partial class MainWindow : Window
             LiveCode.Text = active.Code;
             LiveAsn.Text = $"ASN {active.Asn}" + (string.IsNullOrWhiteSpace(active.Name) ? "" : $" · {active.Name}");
             RecBadge.Visibility = Visibility.Visible;
-            TimerText.Text = App.FormatElapsed(tracker.CurrentElapsedSeconds);
+            TimerText.Text = FormatTimer(tracker.CurrentElapsed);
         }
         else if (sel is not null)
         {
@@ -80,7 +271,7 @@ public partial class MainWindow : Window
             LiveCode.Text = sel.Code;
             LiveAsn.Text = $"ASN {sel.Project.Asn}" + (string.IsNullOrWhiteSpace(sel.Project.Name) ? "" : $" · {sel.Project.Name}");
             RecBadge.Visibility = Visibility.Collapsed;
-            TimerText.Text = "00:00:00";
+            TimerText.Text = FormatTimer(TimeSpan.Zero);
         }
         else
         {
@@ -89,7 +280,7 @@ public partial class MainWindow : Window
             LiveCode.Text = "Not tracking";
             LiveAsn.Text = tracker.Projects.Count == 0 ? "Add a project to begin" : "Select a project, then press start";
             RecBadge.Visibility = Visibility.Collapsed;
-            TimerText.Text = "00:00:00";
+            TimerText.Text = FormatTimer(TimeSpan.Zero);
         }
 
         // today totals per row + grand total
@@ -136,14 +327,17 @@ public partial class MainWindow : Window
         else if (sel.Id == tracker.Active?.Id)
         {
             PrimaryBtn.Content = "■";
-            PrimaryBtn.Background = (Brush)FindResource("Live");
+            // SetResourceReference (not a one-off FindResource snapshot) so this tracks accent
+            // changes live — FindResource captured the brush once and only refreshed the next
+            // time this method happened to run, which read as a lag after changing the accent.
+            PrimaryBtn.SetResourceReference(Button.BackgroundProperty, "Live");
             PrimaryBtn.ToolTip = "Stop";
             HintText.Text = $"Tracking {sel.Code}. Select another to switch.";
         }
         else
         {
             PrimaryBtn.Content = "⇆";
-            PrimaryBtn.Background = (Brush)FindResource("Accent");
+            PrimaryBtn.SetResourceReference(Button.BackgroundProperty, "Accent");
             PrimaryBtn.ToolTip = $"Switch to {sel.Code}";
             HintText.Text = $"Switch to {sel.Code} — banks the current block first.";
         }
@@ -179,10 +373,18 @@ public partial class MainWindow : Window
         if (p is not null) { A.Tracker.AddProject(p); }
     }
 
+    private SettingsWindow? _settings;
+
     private void Settings_Click(object sender, RoutedEventArgs e)
     {
-        new SettingsWindow { Owner = this }.ShowDialog();
-        OnStateChanged();
+        if (_settings is { IsVisible: true })
+        {
+            _settings.Close();
+            return;
+        }
+        _settings = new SettingsWindow { Owner = this };
+        _settings.Closed += (_, _) => { OnStateChanged(); _settings = null; };
+        _settings.Show();
     }
 
     private void Timesheets_Click(object sender, RoutedEventArgs e) => A.OpenTimesheets();
@@ -206,6 +408,7 @@ public partial class MainWindow : Window
         }
         A.Tick -= OnTick;
         A.StateChanged -= OnStateChanged;
+        _msTimer?.Stop();
         base.OnClosing(e);
     }
 }
@@ -216,6 +419,13 @@ public sealed class ProjectRow : INotifyPropertyChanged
     public Project Project { get; }
     public string Id => Project.Id;
     public string Code => Project.Code;
+
+    /// <summary>" - {Asn}" when there's an ASN to show and the setting is on, else empty —
+    /// computed once at construction since a row is rebuilt whenever anything it depends on
+    /// (project data or this setting) changes.</summary>
+    public string AsnDisplay => !string.IsNullOrEmpty(Project.Asn) && App.Current.Settings.ShowAsnInMainList
+        ? $" - {Project.Asn}" : "";
+
     public Brush Swatch { get; }
 
     private string _hoursText = "0.0 h";
