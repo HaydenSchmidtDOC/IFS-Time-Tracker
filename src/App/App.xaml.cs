@@ -377,8 +377,17 @@ public partial class App : Application
     {
         _main.Show();
         if (_main.WindowState == WindowState.Minimized) _main.WindowState = WindowState.Normal;
-        _main.Activate();
-        _main.Topmost = true; _main.Topmost = false;
+        // Deferred (not called inline): CloseTimesheets passes this method itself as
+        // AnimateCloseTo's onDone, which hides the timesheet window immediately afterward in the
+        // SAME synchronous callback — running this once the dispatcher queue is idle guarantees
+        // it's the last word, after that Hide() (and anything else already queued) has finished.
+        // ForceForeground (not Activate()/Topmost-toggle — both tried, neither reliable) — see
+        // its own remarks for why plain SetForegroundWindow calls were being silently ignored.
+        _main.Dispatcher.BeginInvoke(new Action(() =>
+        {
+            ForceForeground.Apply(new WindowInteropHelper(_main).Handle);
+            _main.Focus();
+        }), DispatcherPriority.ApplicationIdle);
     }
 
     /// <summary>Entry point for the pill's double-click/right-click and the tray icon's
@@ -394,8 +403,12 @@ public partial class App : Application
         {
             ts.Show();
             if (ts.WindowState == WindowState.Minimized) ts.WindowState = WindowState.Normal;
-            ts.Activate();
-            ts.Topmost = true; ts.Topmost = false;
+            // Deferred + ForceForeground — see ShowMainWindow's remarks.
+            ts.Dispatcher.BeginInvoke(new Action(() =>
+            {
+                ForceForeground.Apply(new WindowInteropHelper(ts).Handle);
+                ts.Focus();
+            }), DispatcherPriority.ApplicationIdle);
             return;
         }
         ShowMainWindow();
@@ -467,6 +480,10 @@ public partial class App : Application
     {
         _timesheets ??= new TimesheetWindow();
         if (_timesheets.IsVisible) { _timesheets.Activate(); return; }
+        // Settings is owned by _main and isn't modal, so it can still be open when this fires —
+        // left open, it'd be orphaned-looking (still on screen, owner hidden underneath the
+        // timesheet view) rather than actually closed alongside it.
+        _main.CloseSettingsIfOpen();
         _timesheets.AnimateOpenFrom(_main);
         _main.Hide();
     }

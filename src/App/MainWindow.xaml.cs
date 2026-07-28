@@ -389,6 +389,11 @@ public partial class MainWindow : Window
 
     private void Timesheets_Click(object sender, RoutedEventArgs e) => A.OpenTimesheets();
 
+    /// <summary>Closes the Settings window if it's open — called by App.OpenTimesheets before
+    /// switching to the timesheet view, since Settings is owned by this window and would
+    /// otherwise be left open and orphaned-looking once this window is hidden underneath it.</summary>
+    internal void CloseSettingsIfOpen() => _settings?.Close();
+
     // ---- custom chrome ----
     private void TitleBar_Drag(object sender, MouseButtonEventArgs e)
     {

@@ -6,6 +6,7 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Shapes;
+using System.Windows.Threading;
 using TimeTracker.App.Interop;
 using TimeTracker.App.UI;
 using TimeTracker.Core;
@@ -332,11 +333,17 @@ public partial class TimesheetWindow : Window
 
         Show();
         Activate();
-        // Activate() alone can leave this window looking frontmost while the OS still treats
-        // something else (main, which Show() here doesn't reliably outrun) as active — the same
-        // issue App.ShowMainWindow works around with this same toggle; see CloseTimesheets'
-        // remarks for the fuller explanation.
-        Topmost = true; Topmost = false;
+        // App.OpenTimesheets calls _main.Hide() immediately after this method returns — still
+        // within the SAME synchronous call — so this is deferred to run once the dispatcher
+        // queue is idle, guaranteeing it's the last word, after that Hide() (and anything else
+        // already queued) has fully finished. ForceForeground (not Activate()/Topmost-toggle —
+        // both tried, neither reliable) — see its own remarks for why plain SetForegroundWindow
+        // calls were being silently ignored even with the deferral.
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            ForceForeground.Apply(new WindowInteropHelper(this).Handle);
+            Focus();
+        }), DispatcherPriority.ApplicationIdle);
 
         var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
         ChartArea.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(180)));

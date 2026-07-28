@@ -1,5 +1,76 @@
 # Changelog
 
+## [Unreleased]
+
+### New
+
+- **Per-project enable/disable.** A disabled project drops out of the main window and quick
+  switcher (so it stops cluttering the pick-a-project list) but keeps its history and stays
+  editable from Settings — nothing is deleted.
+- **Optional sub-second timer display**, with a dedicated monospace timer font (Cascadia Mono's
+  dotted zero read oddly blown up at the main window's clock size).
+- **"Minimise app only" setting** (Settings → Tracking, default on). Hides the main window's
+  close (✕) button, leaving only minimise, so the app can't be closed by accident and then be
+  hard to find again — a real problem for users who'd also turned off the pill and/or tray icon.
+  Minimise always still works and always leaves a taskbar entry behind.
+- Combined with **"start minimised"**, the app now launches minimised-to-taskbar instead of
+  fully hidden with no taskbar entry at all — so there's always a click-to-restore path even
+  with the pill and tray icon both off. (If "minimise app only" is off, "start minimised" still
+  behaves as before: no window, tray/pill only.)
+
+### Fixed
+
+- **The main window and the Timesheets window could both end up open at once.** Double-clicking
+  the pill or the taskbar icon while Timesheets was open used to also pop the main window up
+  behind it instead of bringing Timesheets forward — and then the main window's own "Timesheets"
+  button did nothing, since Timesheets was already (invisibly) open. Pill double-click/right-
+  click, and the tray icon's double-click/"Open", now always bring forward whichever of the two
+  is the current front surface; the two are never both on screen together.
+- **Escape now closes the Settings window**, and closes the Timesheet settings popover if it's
+  open.
+- Relabelled the main window's "REC" badge to "LIVE", matching the project list's own badge for
+  the same state.
+- **Taskbar icon click didn't minimise the app when it was already focused** — clicking just
+  re-activated it instead of toggling it away, unlike virtually every other Windows app.
+  Root cause: `WindowStyle="None"` (used for the app's custom-drawn title bars) strips the
+  `WS_SYSMENU`/`WS_MINIMIZEBOX` native style bits the taskbar checks before it'll act — restoring
+  just those bits (`Interop/TaskbarMinimizeFix.cs`) fixes the click without bringing back any
+  native chrome.
+- **Switching between the main window and Timesheets could leave the wrong window with real OS
+  focus** — whichever one you switched to was visibly on top but the OS still treated the other
+  as active, so the first click/keypress went nowhere useful. `Activate()` plus a `Topmost`
+  toggle trick (already used in `App.ShowMainWindow`) fixes the common case, but was still losing
+  a race against a same-frame `Hide()` call on the window being switched away from; that step is
+  now deferred via `Dispatcher.BeginInvoke(..., DispatcherPriority.ApplicationIdle)` so it always
+  runs after the `Hide()` has settled instead of racing it.
+- Fixed a taskbar-icon flicker when closing Timesheets back to the main window: the timesheet
+  window was hiding itself *before* showing the main window, leaving a brief gap with no visible
+  taskbar entry for the app at all — looked like the app had relaunched. Reordered to show-then-
+  hide, matching how the open direction already worked.
+- **The Timesheets window now gets native minimize/restore ("genie") animation, Aero Snap, and a
+  live taskbar thumbnail**, matching every other normal Windows app. It was already using
+  `WindowChrome` for its custom chrome, but `WindowStyle="None"` — Windows has disabled the
+  minimize/restore animation for *any* `WindowStyle="None"` window since Vista, regardless of
+  WindowChrome — silently killed all three. Fixed by keeping `WindowStyle="SingleBorderWindow"`
+  (the default) underneath WindowChrome instead, which is what WindowChrome is actually meant to
+  pair with. Two more tweaks were needed alongside it: `GlassFrameThickness="0"` (not the `-1`
+  "whole window is extended frame" sentinel, which brought back a thin native grey border and
+  added real DWM glass-compositing overhead visible as lag on the fast-ticking ms clock) plus
+  `NonClientFrameEdges="None"` to keep that border gone with the flat value.
+
+### Known limitations
+
+- **The main window did not get the same native-animation fix.** Migrating it off
+  `AllowsTransparency` onto the same `WindowChrome` + `WindowStyle="SingleBorderWindow"` pattern
+  as Timesheets was attempted, but — unlike Timesheets, which only needed the two tweaks above —
+  it triggered a cascade of regressions (thin grey border, ms-clock lag, the focus race, and
+  finally a `WindowChrome` + `SizeToContent="Height"` interaction that rendered the whole window
+  visibly narrower, clipping most of its content) that couldn't be pinned down and fixed blind
+  (no way to visually verify a live WPF render from this environment). Reverted back to
+  `AllowsTransparency` rather than keep guessing; the main window still snaps instantly on
+  minimize/restore instead of animating. Worth revisiting with an actual interactive test pass
+  rather than remote trial-and-error.
+
 ## [0.4.0] Beta — 2026-07-27
 
 ### New

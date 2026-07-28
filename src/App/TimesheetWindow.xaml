@@ -5,7 +5,7 @@
         Title="Timesheets — IFS Time Tracker"
         Icon="Assets/time_tracker.ico"
         Width="920" Height="640" MinWidth="640" MinHeight="440"
-        WindowStyle="None" ResizeMode="CanResize" ShowInTaskbar="True"
+        WindowStyle="SingleBorderWindow" ResizeMode="CanResize" ShowInTaskbar="True"
         Background="{DynamicResource Bg}" FontFamily="{StaticResource UiFont}"
         Closing="Window_Closing" StateChanged="Window_StateChanged"
         PreviewMouseDown="Window_PreviewMouseDown">
@@ -84,9 +84,19 @@
     <!-- WindowChrome keeps native resize/maximize/Aero-Snap/taskbar-thumbnail behaviour while
          letting the title bar be custom-drawn (matching the rest of the app) instead of stock OS
          chrome. CaptionHeight must match the header Border's own Height below; anything inside
-         that band needs IsHitTestVisibleInChrome="True" or its clicks turn into window-drags. -->
+         that band needs IsHitTestVisibleInChrome="True" or its clicks turn into window-drags.
+         WindowStyle is deliberately NOT "None" (see above) — Windows (since Vista) permanently
+         disables the minimize/restore "genie" animation for any WindowStyle="None" window,
+         WindowChrome or not, so WindowChrome needs a real WindowStyle underneath it to hide
+         instead of a stripped one. GlassFrameThickness stays "0" — the "-1" whole-window
+         sentinel was tried and reverted: it repainted a thin native grey border line (fixed
+         here by NonClientFrameEdges="None" instead) and added real DWM glass-compositing
+         overhead that visibly lagged the fast-ticking milliseconds clock. -->
+    <!-- MainWindow.xaml carries the fuller writeup of why these matter, since it's the window
+         that changed most recently. -->
     <shell:WindowChrome.WindowChrome>
         <shell:WindowChrome CaptionHeight="64" ResizeBorderThickness="6" GlassFrameThickness="0"
+                             NonClientFrameEdges="None"
                              CornerRadius="8" UseAeroCaptionButtons="False"/>
     </shell:WindowChrome.WindowChrome>
 
