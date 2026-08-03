@@ -375,8 +375,13 @@ public partial class App : Application
 
     public void ShowMainWindow()
     {
-        _main.Show();
+        // WindowState is restored BEFORE Show() — see the StartMinimized remarks above for why
+        // the other order is a problem: with WindowStyle="None" + SizeToContent="Height", calling
+        // Show() while still Minimized realizes the window at its native minimized (taskbar-icon)
+        // geometry, and the SizeToContent re-layout that follows the WindowState flip doesn't
+        // always correct it back to full width — leaving the window visibly stuck tiny.
         if (_main.WindowState == WindowState.Minimized) _main.WindowState = WindowState.Normal;
+        _main.Show();
         // Deferred (not called inline): CloseTimesheets passes this method itself as
         // AnimateCloseTo's onDone, which hides the timesheet window immediately afterward in the
         // SAME synchronous callback — running this once the dispatcher queue is idle guarantees
@@ -401,8 +406,9 @@ public partial class App : Application
     {
         if (_timesheets is { IsVisible: true } ts)
         {
-            ts.Show();
+            // Order matters — see ShowMainWindow's remarks.
             if (ts.WindowState == WindowState.Minimized) ts.WindowState = WindowState.Normal;
+            ts.Show();
             // Deferred + ForceForeground — see ShowMainWindow's remarks.
             ts.Dispatcher.BeginInvoke(new Action(() =>
             {

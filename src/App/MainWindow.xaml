@@ -96,9 +96,18 @@
                      realized/measured, so the window sometimes computes a height that's a row
                      short on the very first layout pass — clipping the last project behind the
                      footer. The list is always small (a handful of projects), so forcing every
-                     item to be measured up front costs nothing and removes the race. -->
+                     item to be measured up front costs nothing and removes the race.
+
+                     MaxHeight is a temporary bandaid, not a real fix: with SizeToContent="Height"
+                     and no scroll boundary that lands on a clean row edge, capping the list at any
+                     height shorter than its content either clips a partial row or leaves the
+                     scrollable range too short to be usable (both tried, both looked broken).
+                     Raised well past any realistic project count instead, so the window just grows
+                     to fit every project and scrolling effectively never triggers. Revisit with a
+                     real max-visible-rows + clean-edge scroll design later. -->
                 <ListBox x:Name="ProjectList" BorderThickness="0" Background="Transparent"
-                         MaxHeight="260" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         MaxHeight="2000" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         ScrollViewer.CanContentScroll="False"
                          VirtualizingPanel.IsVirtualizing="False"
                          SelectionChanged="ProjectList_SelectionChanged"
                          MouseDoubleClick="ProjectList_DoubleClick" KeyDown="ProjectList_KeyDown">

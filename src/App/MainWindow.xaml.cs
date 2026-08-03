@@ -30,7 +30,11 @@ public partial class MainWindow : Window
         InitializeComponent();
         ProjectList.ItemsSource = _rows;
 
-        SourceInitialized += (_, _) => TaskbarMinimizeFix.Apply(new WindowInteropHelper(this).Handle);
+        SourceInitialized += (_, _) =>
+        {
+            TaskbarMinimizeFix.Apply(new WindowInteropHelper(this).Handle);
+            MinTrackSizeFix.Apply(this);
+        };
 
         Rebuild();
         UpdateLive();

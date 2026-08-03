@@ -57,19 +57,38 @@
   "whole window is extended frame" sentinel, which brought back a thin native grey border and
   added real DWM glass-compositing overhead visible as lag on the fast-ticking ms clock) plus
   `NonClientFrameEdges="None"` to keep that border gone with the flat value.
+- **The main window was rendering clamped to a sliver (~160px) instead of its real 372px width.**
+  Not a WindowChrome regression (that attempt had already been reverted) — on Windows 11 24H2,
+  `WM_GETMINMAXINFO`'s default `ptMinTrackSize` for an `AllowsTransparency` + `WindowStyle="None"`
+  window comes back well under its declared `Width`, and `ResizeMode="NoResize"` doesn't stop
+  Windows applying that minimum to the underlying HWND — it only removes the resize handles.
+  Since `SizeToContent="Height"` then measures/arranges within whatever width Windows actually
+  granted, the whole window rendered clamped down to it. Fixed by handling `WM_GETMINMAXINFO`
+  directly and overwriting `ptMinTrackSize` with the window's own width
+  (`Interop/MinTrackSizeFix.cs`).
+- **Double-clicking the pill while the main window was already open crashed with "Unable to find
+  an entry point named 'GetCurrentThreadId' in DLL 'user32.dll'".** `ForceForeground.cs`'s
+  `GetCurrentThreadId` P/Invoke was declared against the wrong DLL — that function lives in
+  `kernel32.dll`, not `user32.dll` — so it only failed once this code path actually ran it.
 
 ### Known limitations
 
-- **The main window did not get the same native-animation fix.** Migrating it off
-  `AllowsTransparency` onto the same `WindowChrome` + `WindowStyle="SingleBorderWindow"` pattern
-  as Timesheets was attempted, but — unlike Timesheets, which only needed the two tweaks above —
-  it triggered a cascade of regressions (thin grey border, ms-clock lag, the focus race, and
-  finally a `WindowChrome` + `SizeToContent="Height"` interaction that rendered the whole window
-  visibly narrower, clipping most of its content) that couldn't be pinned down and fixed blind
-  (no way to visually verify a live WPF render from this environment). Reverted back to
-  `AllowsTransparency` rather than keep guessing; the main window still snaps instantly on
-  minimize/restore instead of animating. Worth revisiting with an actual interactive test pass
-  rather than remote trial-and-error.
+- **The project list's scroll boundary doesn't land cleanly on a row edge.** Capping
+  `ProjectList`'s height at any value shorter than its content either clipped a partial row or
+  (once that was fixed) left too little scrollable range to be usable — a couple of rows'
+  overshoot bought only a fraction of a row's worth of scrolling. As a bandaid, `MaxHeight` is
+  raised well past any realistic project count (2000), so the window just grows to fit every
+  project and scrolling effectively never triggers. Needs a proper max-visible-rows design (cap
+  by row count, not a pixel height) before re-enabling scrolling for real.
+
+- **The main window still doesn't get native minimize/restore animation, Aero Snap, or a live
+  taskbar thumbnail.** Migrating it off `AllowsTransparency` onto the same `WindowChrome` +
+  `WindowStyle="SingleBorderWindow"` pattern as Timesheets was attempted for the same benefit, but
+  — unlike Timesheets, which only needed the two tweaks above — it triggered a cascade of
+  regressions (thin grey border, ms-clock lag, the focus race) that couldn't be pinned down and
+  fixed blind. Reverted back to `AllowsTransparency` rather than keep guessing; the main window
+  still snaps instantly on minimize/restore instead of animating. Worth revisiting with an actual
+  interactive test pass rather than remote trial-and-error.
 
 ## [0.4.0] Beta — 2026-07-27
 

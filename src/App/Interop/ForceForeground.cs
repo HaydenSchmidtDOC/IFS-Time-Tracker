@@ -19,7 +19,7 @@ public static class ForceForeground
 {
     [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hWnd, IntPtr lpdwProcessId);
-    [DllImport("user32.dll")] private static extern uint GetCurrentThreadId();
+    [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
     [DllImport("user32.dll")] private static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] private static extern bool BringWindowToTop(IntPtr hWnd);
