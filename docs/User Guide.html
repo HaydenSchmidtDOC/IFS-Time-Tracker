@@ -261,7 +261,7 @@
   </div>
   <h1>IFS Time Tracker</h1>
   <p class="tagline">Track hours against IFS projects without leaving your desktop.</p>
-  <span class="beta-chip">v0.4.0 Beta · quick guide</span>
+  <span class="beta-chip">v0.5.0 Beta · quick guide</span>
 </header>
 
 <nav class="toc">
@@ -280,25 +280,22 @@
 <div class="wrap">
 
   <section id="whatsnew">
-    <h2>New in v0.4.0</h2>
-    <h3>A guided first-run tour, plus a smarter, safer Calendar</h3>
-    <p class="lede">The headline this round is a short click-through tour for new installs — but there's also a full pass of Calendar-view polish and safety fixes worth knowing about.</p>
+    <h2>New in v0.5.0</h2>
+    <h3>Per-project enable/disable, an optional ms timer, and a safer close button</h3>
+    <p class="lede">Mostly quality-of-life this round, plus a stack of window-focus and taskbar fixes for anyone juggling the main window and Timesheets together.</p>
 
     <ul class="list">
-      <li><b>Guided first-run tour.</b> A fresh install now offers a short walkthrough — adding a project, tracking time, the quick switcher, and a full tour of the Timesheets window (both views, merge, and drag-to-add/edit/resize/delete in Calendar view, mimed on an overlay rather than touching your real data). Skipped it, or want to see it again? Replay it any time from <b>Settings → Start tutorial</b>.</li>
-      <li><b>Drag to add time in Calendar view.</b> Click-drag empty grid space to highlight a span — showing the snapped time range and, once tall enough, the duration — and release to open the Add dialog pre-filled to it.</li>
-      <li><b>A note prompt when a live session auto-stops on collision</b>, instead of silently banking an empty note — same as a normal Stop.</li>
-      <li><b>Smarter manual add times.</b> A fresh entry now defaults to a sensible 1-hour span (or snaps sooner against whatever's next) instead of a fixed length, and an entry that spans one or more existing blocks now splits around them instead of being rejected.</li>
-      <li>Editing a block now shows (and lets you change) its note.</li>
-      <li><b>Merge sessions</b> is now a one-click toggle pinned to the chart's corner instead of buried in a settings popover, and the Timesheets window <b>remembers whichever view (Totals/Calendar) you last used</b> instead of a fixed default.</li>
+      <li><b>Per-project enable/disable.</b> Click a project's colour swatch in <b>Settings → Projects</b> to disable it — it drops out of the main window and quick switcher so it stops cluttering the list, but its history stays intact and it's still editable from Settings. Click the swatch again to re-enable it.</li>
+      <li><b>Optional sub-second timer display.</b> <b>Settings → Show milliseconds</b> adds a running ms count to the live timer, in a dedicated monospace font sized to stay readable.</li>
+      <li><b>"Minimise app only"</b> (Settings → Tracking, on by default). Hides the main window's close (✕) button so the app can't be closed by accident and then be hard to find again — minimise always still works and always leaves a taskbar entry behind. Combined with <b>Start minimised</b>, the app now launches minimised-to-taskbar instead of fully hidden, so there's always a click-to-restore path even with the pill and tray icon both off.</li>
     </ul>
 
-    <p style="margin-top:18px"><b>Also fixed:</b> a Calendar block no longer visibly jumps/snaps right before its edit dialog opens when you click it; the currently-recording block always shows its title now, even if it started too small to fit one at first; double-click/Enter on the project you're already tracking now stops it, matching the button; the floating pill no longer shows up in Alt-Tab; and an idle discard's note now backfills onto every earlier split of that session, not just the last one.</p>
+    <p style="margin-top:18px"><b>Also fixed:</b> the main window and Timesheets could both end up open at once — double-clicking the pill or taskbar icon now always brings forward whichever one is current, and the two are never both on screen together; Escape now closes the Settings window (and the Timesheet settings popover); the "REC" badge is relabelled "LIVE" to match the project list; the taskbar icon didn't minimise the app when it was already focused, now toggles like any other Windows app; switching between the main window and Timesheets could leave the wrong one with real OS focus; a taskbar-icon flicker when closing Timesheets back to the main window; the Timesheets window now gets native minimize/restore animation, Aero Snap, and a live taskbar thumbnail; the main window was rendering clamped to a ~160px sliver on some Windows 11 24H2 machines; and a crash ("GetCurrentThreadId" entry point) when double-clicking the pill while the main window was already open.</p>
 
     <div class="callout beta">
       <h4>Known limitations</h4>
-      <p><b>No undo yet.</b> Deleting or dragging a block applies immediately — a bad drop or misclick means fixing it by hand. Your data folder's OneDrive file history is a partial safety net in the meantime, but it's worth being a little careful.</p>
-      <p>A block can't be dragged across a month boundary (e.g. the last day of one month onto the 1st of the next) — that specific move is quietly rejected rather than applied.</p>
+      <p>The project list's scroll boundary doesn't land cleanly on a row edge, so as a bandaid the list just grows to fit every project instead of scrolling — fine for realistic project counts, but not a real fix yet.</p>
+      <p>The main window still doesn't get native minimize/restore animation, Aero Snap, or a live taskbar thumbnail (Timesheets does, as of this release) — it still snaps instantly instead of animating.</p>
     </div>
   </section>
 
@@ -473,11 +470,11 @@
     <div class="settings-grid">
       <div class="sec">
         <h5>Tracking</h5>
-        <p>Note prompt, pill/tray visibility, start minimised, start with Windows, and the idle threshold (minutes).</p>
+        <p>Note prompt, pill/tray visibility, show milliseconds, start minimised, start with Windows, minimise app only, and the idle threshold (minutes).</p>
       </div>
       <div class="sec">
         <h5>Projects</h5>
-        <p>Add, edit, or remove projects — code, ASN, name, and colour.</p>
+        <p>Add, edit, or remove projects — code, ASN, name, and colour. Click a project's colour swatch to enable/disable it without losing its history.</p>
       </div>
       <div class="sec">
         <h5>Data location</h5>
@@ -499,7 +496,7 @@
 
   <div class="callout tip">
     <h4>A few things worth knowing</h4>
-    <p><b>Closing the main window doesn't quit the app</b> — it keeps running in the tray/pill. Use <b>Quit</b> from the tray menu to actually exit.</p>
+    <p><b>Closing the main window doesn't quit the app</b> — it keeps running in the tray/pill. Use <b>Quit</b> from the tray menu to actually exit. With <b>Minimise app only</b> on (the default), the window's close (✕) button is hidden entirely — use the minimise button instead, which always still works.</p>
     <p>The pill and tray icon always show the <i>same</i> colour as the project in the main list — that's the whole point of the colour-coding, so you can tell what's running from any of the three without reading text.</p>
     <p>Your data folder is inside OneDrive, so it syncs on its own — no separate backup step needed.</p>
   </div>
