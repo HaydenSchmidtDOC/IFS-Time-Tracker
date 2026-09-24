@@ -156,4 +156,24 @@ public sealed class Settings
     /// <summary>Which bundled full-palette theme is active when <see cref="ThemeMode"/> is
     /// "Custom": "Nightshade", "Terminal", or "Sunset".</summary>
     public string CustomThemeName { get; set; } = "Nightshade";
+
+    /// <summary>
+    /// Whether to check GitHub Releases for a newer build. When on (the default), the app checks
+    /// at most once per day (see <see cref="LastUpdateCheckUtc"/>) and offers to update if a newer
+    /// version exists. When off, no network call is made at all.
+    /// </summary>
+    public bool CheckForUpdates { get; set; } = true;
+
+    /// <summary>
+    /// UTC instant of the last update check, used to throttle checks to at most once per day so a
+    /// launch doesn't hit the network every time. Null until the first check.
+    /// </summary>
+    public DateTime? LastUpdateCheckUtc { get; set; }
+
+    /// <summary>
+    /// A version the user chose to skip ("Skip this version" in the update prompt). The app won't
+    /// offer that version again, but will still offer anything newer. Empty/null means nothing is
+    /// skipped.
+    /// </summary>
+    public string? SkippedUpdateVersion { get; set; }
 }

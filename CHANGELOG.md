@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.6.0] Beta — 2026-09-24
+
+### New
+
+- **In-app updates from GitHub Releases.** The app now checks GitHub Releases at most once a day
+  (Settings → Updates, on by default) and offers to update in place when a newer version exists —
+  no more manually downloading a zip and replacing the exe. The new exe is downloaded, its SHA256
+  verified, and swapped in by a second instance of the app once the running one exits, then the
+  app relaunches. A "Check now" button in Settings forces an immediate check, and a "Skip this
+  version" option stops the app nagging about a specific release. Releases are published by
+  pushing a `vX.Y.Z` tag (see `.github/workflows/release.yml`).
+
 ## [0.5.0] Beta — 2026-08-14
 
 ### New

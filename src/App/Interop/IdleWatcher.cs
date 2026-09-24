@@ -23,6 +23,10 @@ public sealed class IdleWatcher : IDisposable
 
     private DateTime? _idleStartUtc;
     private bool _locked;
+    // Last input tick recorded at the moment the session unlocked. Until the user provides fresh
+    // input, GetLastInputInfo keeps reporting the pre-lock time, which would otherwise make Poll
+    // re-detect the SAME away span that SessionUnlock already handled (double "you were away").
+    private uint? _lastInputTickAtUnlock;
 
     public int ThresholdMinutes { get; set; }
 
@@ -54,6 +58,16 @@ public sealed class IdleWatcher : IDisposable
         var idleMs = GetIdleMilliseconds();
         var now = _utcNow();
 
+        // After an unlock, ignore the stale pre-lock idle time until the user actually provides
+        // fresh input. Otherwise Poll would re-fire the same away span SessionUnlock already
+        // handled (double "you were away" prompt). See _lastInputTickAtUnlock.
+        if (_lastInputTickAtUnlock is uint unlockTick && GetLastInputTick() == unlockTick)
+        {
+            _idleStartUtc = null;
+            return;
+        }
+        _lastInputTickAtUnlock = null;
+
         if (idleMs >= ThresholdMinutes * 60_000L)
         {
             // Mark the moment idleness began (only once per away span).
@@ -78,6 +92,9 @@ public sealed class IdleWatcher : IDisposable
 
             case SessionSwitchReason.SessionUnlock:
                 _locked = false;
+                // Remember the input tick at unlock so Poll can ignore the stale pre-lock idle
+                // time until the user provides fresh input (see Poll).
+                _lastInputTickAtUnlock = GetLastInputTick();
                 if (_idleStartUtc is DateTime start)
                 {
                     FireIfSignificant(start, _utcNow());
@@ -98,6 +115,13 @@ public sealed class IdleWatcher : IDisposable
         var info = new LASTINPUTINFO { cbSize = (uint)Marshal.SizeOf<LASTINPUTINFO>() };
         if (!GetLastInputInfo(ref info)) return 0;
         return unchecked((uint)Environment.TickCount - info.dwTime);
+    }
+
+    private static uint GetLastInputTick()
+    {
+        var info = new LASTINPUTINFO { cbSize = (uint)Marshal.SizeOf<LASTINPUTINFO>() };
+        if (!GetLastInputInfo(ref info)) return 0;
+        return info.dwTime;
     }
 
     public void Dispose()

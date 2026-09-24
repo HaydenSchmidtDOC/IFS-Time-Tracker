@@ -60,6 +60,25 @@ one file wherever it needs to live; a `data/` folder is created alongside it on 
 `PublishProfile` — that name is reserved for `.pubxml` files, so a different one is used here
 to avoid a spurious "profile not found" warning.)*
 
+### Releases & in-app updates
+
+Releases are published to **GitHub Releases** (see `.github/workflows/release.yml`): pushing a
+tag like `v0.6.0` builds the self-contained exe and uploads it alongside a `latest.json`
+metadata asset (version + asset URL + SHA256). The app checks that metadata at most once a day
+and offers to update in place when a newer version exists — no manual zip download needed.
+
+To publish a release:
+
+1. Bump `<Version>` in `src/App/TimeTracker.csproj` (and add a `CHANGELOG.md` entry).
+2. Commit and push a matching tag: `git tag v0.6.0 && git push origin v0.6.0`.
+3. The workflow builds and uploads the release; the app will detect it on its next daily check
+   (or via Settings → Updates → "Check now").
+
+The update flow: the app downloads the new exe to a temp file, verifies its SHA256, then
+launches a second instance of itself with `--update` (see `App.TryHandleUpdateArgs`) which waits
+for the running app to exit, swaps the exe, and relaunches. The running exe is locked while the
+app is alive, so the swap is always done by that second instance.
+
 ## IFS export mapping
 
 The internal monthly log (`data/log-YYYY-MM.csv`) is a rich superset: date, project code, ASN,

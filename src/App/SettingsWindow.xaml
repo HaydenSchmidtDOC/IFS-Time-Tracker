@@ -197,6 +197,33 @@
                             HorizontalAlignment="Left"/>
 
                     <Border Height="1" Background="{DynamicResource Border}" Margin="0,18"/>
+
+                    <!-- ===== Updates ===== -->
+                    <TextBlock Text="UPDATES" Style="{StaticResource EyebrowText}" Margin="0,0,0,8"/>
+                    <Grid Margin="0,0,0,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="Check for updates automatically" FontSize="13"
+                                   Foreground="{DynamicResource Text}" VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,0,10,0"/>
+                        <ContentControl Grid.Column="1" x:Name="CheckUpdatesToggleHost" Focusable="False" VerticalAlignment="Center"/>
+                    </Grid>
+                    <TextBlock Text="Checks GitHub Releases at most once a day and offers to update when a newer version exists."
+                               FontSize="11" Foreground="{DynamicResource TextFaint}" Margin="0,0,0,10" TextWrapping="Wrap"/>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="8"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" x:Name="UpdateStatusText" FontSize="12" Foreground="{DynamicResource TextDim}"
+                                   TextWrapping="Wrap" VerticalAlignment="Center"/>
+                        <Button Grid.Column="2" Content="Check now" Click="CheckNow_Click" Style="{StaticResource Btn}"
+                                Padding="10,4" FontSize="12"/>
+                    </Grid>
+
+                    <Border Height="1" Background="{DynamicResource Border}" Margin="0,18"/>
                     <TextBlock x:Name="VersionText" FontSize="10.5" Foreground="{DynamicResource TextFaint}"
                                HorizontalAlignment="Center" Margin="0,14,0,0"/>
                 </StackPanel>

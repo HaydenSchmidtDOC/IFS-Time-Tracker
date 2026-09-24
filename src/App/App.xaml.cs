@@ -1,4 +1,7 @@
+using System.Diagnostics;
 using System.IO;
+using System.Net.Http;
+using System.Reflection;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Interop;
@@ -18,6 +21,16 @@ public partial class App : Application
 {
     private Mutex? _instanceMutex;
     private bool _ownsInstanceMutex;
+
+    // GitHub repo the app checks for updates against. Public repo, so the releases/latest
+    // download URL needs no auth.
+    private const string UpdateOwner = "HaydenSchmidtDOC";
+    private const string UpdateRepo = "IFS-Time-Tracker";
+    // Command-line flag that turns a second instance of this exe into the updater (see
+    // TryHandleUpdateArgs). Kept as a const so the launch site and the handler can't drift.
+    private const string UpdateArg = "--update";
+
+    private static readonly HttpClient Http = new();
 
     public AppPaths Paths { get; private set; } = null!;
     public JsonStore Store { get; private set; } = null!;
@@ -55,9 +68,19 @@ public partial class App : Application
     /// <summary>True once Quit has been chosen — lets MainWindow tell "hide to tray" from a real exit.</summary>
     public bool IsQuitting { get; private set; }
 
+    /// <summary>Human-readable result of the last update check, shown in the Settings window's
+    /// Updates section (e.g. "v0.6.0 available" or "You're up to date"). Null until a check runs.</summary>
+    public string? LastUpdateCheckResult { get; private set; }
+
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+
+        // Updater mode: a second instance of this exe launched with --update <newExe> <pid>.
+        // Must run BEFORE the single-instance mutex below — the first instance still holds
+        // "TimeTracker.SingleInstance" while it's exiting, so this instance would otherwise be
+        // rejected as a duplicate and shut down before doing the swap.
+        if (TryHandleUpdateArgs(e.Args)) return;
 
         // Last-resort safety net: WPF kills the whole process on any unhandled exception on the
         // UI thread by default, with no dialog and nothing to diagnose from afterwards. For a
@@ -162,6 +185,12 @@ public partial class App : Application
             Store.SaveSettings(Settings);
             if (WelcomePrompt.Ask()) StartTutorial();
         }
+
+        // Update check — fire-and-forget so startup never blocks on the network. Gated by the
+        // setting and throttled to at most once a day (see CheckForUpdatesAsync). Runs after the
+        // main window is up so any prompt appears in front of a visible app.
+        if (Settings.CheckForUpdates)
+            _ = CheckForUpdatesAsync(force: false);
     }
 
     /// <summary>Runs the guided tour — the single entry point for both the first-run welcome
@@ -592,6 +621,170 @@ public partial class App : Application
         if (_ownsInstanceMutex) _instanceMutex?.ReleaseMutex();
         _instanceMutex?.Dispose();
         base.OnExit(e);
+    }
+
+    // ---------------- updates ----------------
+
+    /// <summary>
+    /// Check GitHub Releases for a newer build and, if one is available (and not skipped), prompt
+    /// the user. Returns a short human-readable status string for the Settings window. When
+    /// <paramref name="force"/> is false the check is throttled to at most once a day; the
+    /// Settings "Check now" button passes true to bypass that. Runs on a background thread and
+    /// marshals back to the UI thread before showing any prompt.
+    /// </summary>
+    public async Task<string?> CheckForUpdatesAsync(bool force)
+    {
+        // Throttle: at most one automatic check per day. "Check now" (force) always runs.
+        if (!force && Settings.LastUpdateCheckUtc is { } last && DateTime.UtcNow - last < TimeSpan.FromDays(1))
+            return LastUpdateCheckResult;
+
+        Settings.LastUpdateCheckUtc = DateTime.UtcNow;
+        Store.SaveSettings(Settings);
+
+        var current = Assembly.GetExecutingAssembly().GetName().Version ?? new Version(0, 0, 0);
+        var checker = new UpdateChecker(Http, UpdateOwner, UpdateRepo);
+        var info = await Task.Run(() => checker.CheckAsync()).ConfigureAwait(false);
+
+        if (info is null)
+        {
+            LastUpdateCheckResult = "Couldn't reach the update server.";
+            return LastUpdateCheckResult;
+        }
+
+        if (!UpdateMetadata.IsNewer(current, info.Version))
+        {
+            LastUpdateCheckResult = "You're up to date.";
+            return LastUpdateCheckResult;
+        }
+
+        // Don't re-offer a version the user already chose to skip.
+        if (Settings.SkippedUpdateVersion is { } skipped
+            && UpdateMetadata.TryParseVersion(skipped, out var skippedV)
+            && skippedV == info.Version)
+        {
+            LastUpdateCheckResult = $"v{info.Version} available (skipped).";
+            return LastUpdateCheckResult;
+        }
+
+        LastUpdateCheckResult = $"v{info.Version} available.";
+        var choice = await Dispatcher.InvokeAsync(() => UpdatePrompt.Ask(info)).Task.ConfigureAwait(false);
+        switch (choice)
+        {
+            case UpdateChoice.UpdateNow:
+                await ApplyUpdateAsync(info).ConfigureAwait(false);
+                break;
+            case UpdateChoice.SkipVersion:
+                Settings.SkippedUpdateVersion = info.Version.ToString();
+                Store.SaveSettings(Settings);
+                break;
+        }
+        return LastUpdateCheckResult;
+    }
+
+    /// <summary>
+    /// Download and verify the new exe, then hand off to a second instance of this app (launched
+    /// with <see cref="UpdateArg"/>) to swap the file once this process exits. The running exe is
+    /// locked, so the swap can't happen in-process.
+    /// </summary>
+    private async Task ApplyUpdateAsync(UpdateInfo info)
+    {
+        var installer = new UpdateInstaller(Http);
+        var tmp = await Task.Run(() => installer.DownloadAsync(info)).ConfigureAwait(false);
+        if (tmp is null)
+        {
+            await Dispatcher.InvokeAsync(() => InfoPrompt.Show("Update failed", "The update couldn't be downloaded. Please try again later.")).Task.ConfigureAwait(false);
+            return;
+        }
+
+        var target = Environment.ProcessPath;
+        if (string.IsNullOrWhiteSpace(target))
+        {
+            TryDelete(tmp);
+            return;
+        }
+
+        // Launch a second instance as the updater, then quit. The updater waits for this process
+        // to exit, replaces the exe, and relaunches the app.
+        var psi = new ProcessStartInfo
+        {
+            FileName = target,
+            UseShellExecute = true,
+            Arguments = $"{UpdateArg} \"{tmp}\" {Environment.ProcessId}",
+        };
+        try
+        {
+            Process.Start(psi);
+            QuitApp();
+        }
+        catch
+        {
+            TryDelete(tmp);
+            await Dispatcher.InvokeAsync(() => InfoPrompt.Show("Update failed", "The updater couldn't be started. Please try again later.")).Task.ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Updater mode: swap in a downloaded exe once the original process has exited, then relaunch
+    /// the app. Returns true (and the caller returns from OnStartup immediately) when the args
+    /// were the updater's. Args: <c>--update &lt;newExe&gt; &lt;pid&gt;</c>.
+    /// </summary>
+    private bool TryHandleUpdateArgs(string[] args)
+    {
+        if (args.Length < 3 || !string.Equals(args[0], UpdateArg, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var newExe = args[1];
+        var pid = int.TryParse(args[2], out var p) ? p : 0;
+
+        // Wait for the original process to exit so its file lock on the exe is released.
+        if (pid > 0)
+        {
+            try
+            {
+                using var proc = Process.GetProcessById(pid);
+                proc.WaitForExit();
+            }
+            catch { /* process already gone — fine */ }
+        }
+
+        var target = Environment.ProcessPath;
+        var ok = !string.IsNullOrWhiteSpace(target)
+                 && File.Exists(newExe)
+                 && TryReplace(target!, newExe);
+
+        TryDelete(newExe);
+
+        // Relaunch the freshly-updated app (without the --update flag) so the user lands back in
+        // a running tracker. Only when the swap succeeded.
+        if (ok && !string.IsNullOrWhiteSpace(target))
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo { FileName = target, UseShellExecute = true });
+            }
+            catch { /* best effort — the update still applied */ }
+        }
+
+        Shutdown();
+        return true;
+    }
+
+    private static bool TryReplace(string target, string newExe)
+    {
+        try
+        {
+            // File.Replace is atomic-ish and preserves the target's metadata; falls back to a
+            // delete+move if the target doesn't exist yet.
+            if (File.Exists(target)) File.Replace(newExe, target, null);
+            else File.Move(newExe, target);
+            return true;
+        }
+        catch { return false; }
+    }
+
+    private static void TryDelete(string path)
+    {
+        try { if (File.Exists(path)) File.Delete(path); } catch { /* best effort */ }
     }
 
     private void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)

@@ -44,6 +44,7 @@ public partial class SettingsWindow : Window
     private ToggleSwitch _minimizeAppOnlyToggle = null!;
     private ToggleSwitch _showAsnToggle = null!;
     private ToggleSwitch _showMsToggle = null!;
+    private ToggleSwitch _checkUpdatesToggle = null!;
 
     public SettingsWindow()
     {
@@ -79,6 +80,10 @@ public partial class SettingsWindow : Window
         _showAsnToggle = new ToggleSwitch(s.ShowAsnInMainList);
         _showAsnToggle.Toggled += on => A.SetShowAsnInMainList(on);
         ShowAsnToggleHost.Content = _showAsnToggle.Root;
+        _checkUpdatesToggle = new ToggleSwitch(s.CheckForUpdates);
+        _checkUpdatesToggle.Toggled += on => { A.Settings.CheckForUpdates = on; A.Store.SaveSettings(A.Settings); };
+        CheckUpdatesToggleHost.Content = _checkUpdatesToggle.Root;
+        UpdateStatusText.Text = A.LastUpdateCheckResult ?? "Not checked yet.";
         IdleBox.Text = s.IdleThresholdMinutes.ToString();
         IdleBox.LostFocus += (_, _) =>
         {
@@ -600,6 +605,13 @@ public partial class SettingsWindow : Window
     {
         Close();
         A.StartTutorial();
+    }
+
+    private async void CheckNow_Click(object sender, RoutedEventArgs e)
+    {
+        UpdateStatusText.Text = "Checking…";
+        var result = await A.CheckForUpdatesAsync(force: true);
+        UpdateStatusText.Text = result ?? "No update available.";
     }
     private void TitleBar_Drag(object sender, MouseButtonEventArgs e) { if (e.ChangedButton == MouseButton.Left) DragMove(); }
 }

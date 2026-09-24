@@ -1,0 +1,53 @@
+name: Release
+
+# Builds the single-file self-contained exe and publishes it as a GitHub Release with a
+# latest.json metadata asset that the app's in-app updater reads. Triggered by pushing a tag
+# like v0.6.0 (the version in src/App/TimeTracker.csproj should match the tag).
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Publish self-contained exe
+        run: dotnet publish src/App/TimeTracker.csproj -c Release -p:PublishSelfContained=true -o dist
+
+      - name: Compute SHA256 of the exe
+        id: hash
+        shell: pwsh
+        run: |
+          $exe = Get-Item 'dist/IFS Time Tracker.exe'
+          $hash = (Get-FileHash $exe.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          $tag = $env:GITHUB_REF_NAME.TrimStart('v')
+          $assetUrl = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:GITHUB_REF_NAME/IFS%20Time%20Tracker.exe"
+          $releaseUrl = "https://github.com/$env:GITHUB_REPOSITORY/releases/tag/$env:GITHUB_REF_NAME"
+          $json = @{
+            version    = $tag
+            assetUrl   = $assetUrl
+            sha256     = $hash
+            releaseUrl = $releaseUrl
+          } | ConvertTo-Json -Compress
+          Set-Content -Path 'dist/latest.json' -Value $json -NoNewline
+          Write-Output "sha256=$hash"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/IFS Time Tracker.exe
+            dist/latest.json
+          generate_release_notes: true
