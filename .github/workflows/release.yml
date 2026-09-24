@@ -26,14 +26,22 @@ jobs:
       - name: Publish self-contained exe
         run: dotnet publish src/App/TimeTracker.csproj -c Release -p:PublishSelfContained=true -o dist
 
+      # GitHub's release uploader replaces spaces in asset names with dots (e.g. "IFS Time
+      # Tracker.exe" -> "IFS.Time.Tracker.exe"), which would break a hardcoded URL. Rename to a
+      # no-space name so the asset URL is deterministic and matches latest.json exactly.
+      - name: Rename exe to a no-space asset name
+        shell: pwsh
+        run: |
+          Move-Item -Force 'dist/IFS Time Tracker.exe' 'dist/IFS-Time-Tracker.exe'
+
       - name: Compute SHA256 of the exe
         id: hash
         shell: pwsh
         run: |
-          $exe = Get-Item 'dist/IFS Time Tracker.exe'
+          $exe = Get-Item 'dist/IFS-Time-Tracker.exe'
           $hash = (Get-FileHash $exe.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
           $tag = $env:GITHUB_REF_NAME.TrimStart('v')
-          $assetUrl = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:GITHUB_REF_NAME/IFS%20Time%20Tracker.exe"
+          $assetUrl = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:GITHUB_REF_NAME/IFS-Time-Tracker.exe"
           $releaseUrl = "https://github.com/$env:GITHUB_REPOSITORY/releases/tag/$env:GITHUB_REF_NAME"
           $json = @{
             version    = $tag
@@ -48,6 +56,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/IFS Time Tracker.exe
+            dist/IFS-Time-Tracker.exe
             dist/latest.json
           generate_release_notes: true
