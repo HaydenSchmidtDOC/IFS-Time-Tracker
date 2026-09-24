@@ -1,6 +1,9 @@
 # ---- Claude Code local files ----
 .claude/
 
+# ---- Local MCP server config (personal dev tool, not part of the repo) ----
+.mcp.json
+
 # ---- .NET build output ----
 bin/
 obj/

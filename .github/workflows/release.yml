@@ -3,6 +3,11 @@ name: Release
 # Builds the single-file self-contained exe and publishes it as a GitHub Release with a
 # latest.json metadata asset that the app's in-app updater reads. Triggered by pushing a tag
 # like v0.6.0 (the version in src/App/TimeTracker.csproj should match the tag).
+#
+# Security: this workflow publishes the exe that every user's app auto-updates to, so it is a
+# supply-chain target. Third-party actions are pinned to commit SHAs (not mutable tags) so a
+# compromised/mutated action tag can't inject code into the release build. Permissions are
+# scoped to the minimum. Releases are only built from the default branch.
 
 on:
   push:
@@ -11,15 +16,31 @@ on:
 
 permissions:
   contents: write
+  id-token: none
 
 jobs:
   build:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      # Supply-chain guard: only publish a release if the tag points at the default branch's
+      # HEAD. A tag pushed to a fork or a stale/non-default commit must never publish an exe
+      # that users would auto-update to. Fails the job (no release) otherwise.
+      - name: Verify tag points at the default branch
+        shell: pwsh
+        run: |
+          $default = "${{ github.event.repository.default_branch }}"
+          $tagSha = git rev-parse "$env:GITHUB_REF_NAME^{commit}"
+          $branchSha = git rev-parse "origin/$default"
+          if ($tagSha -ne $branchSha) {
+            Write-Error "Tag $env:GITHUB_REF_NAME does not point at the default branch HEAD ($default). Refusing to publish a release."
+            exit 1
+          }
+          Write-Output "Tag $env:GITHUB_REF_NAME points at $default HEAD — OK"
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: '8.0.x'
 
@@ -53,7 +74,7 @@ jobs:
           Write-Output "sha256=$hash"
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: |
             dist/IFS-Time-Tracker.exe
