@@ -31,8 +31,17 @@ public partial class TimesheetWindow : Window
     /// toggle's SelectionChanged below) writes back to Settings.DefaultTimesheetView, and
     /// AnimateOpenFrom reads it back on each fresh open — so the window just resumes on
     /// whichever view was last used rather than a fixed, separately-configured default.</summary>
-    private enum ViewMode { Bar, Calendar }
+    private enum ViewMode { Bar, Calendar, Project }
     private ViewMode _viewMode;
+    private DateTime _monthStart; // first of the displayed month, Project view only
+    private double _projectScrollOffset; // Project view's horizontal scroll, kept across rebuilds
+
+    private static ViewMode ModeFromSetting(string s)
+        => s == "Calendar" ? ViewMode.Calendar : s == "Project" ? ViewMode.Project : ViewMode.Bar;
+    private static string ModeToSetting(ViewMode m)
+        => m == ViewMode.Calendar ? "Calendar" : m == ViewMode.Project ? "Project" : "Bar";
+    private static int ModeIndex(ViewMode m) => (int)m;
+    private static DateTime StartOfMonth(DateTime d) => new(d.Year, d.Month, 1);
     private readonly SegmentedToggle _viewToggle;
 
     // Calendar view remembers its own scroll offset across the once-a-second rebuild (see
@@ -136,9 +145,10 @@ public partial class TimesheetWindow : Window
     {
         InitializeComponent();
         _weekStart = StartOfWeek(DateTime.Today);
-        _viewMode = A.Settings.DefaultTimesheetView == "Calendar" ? ViewMode.Calendar : ViewMode.Bar;
+        _monthStart = StartOfMonth(DateTime.Today);
+        _viewMode = ModeFromSetting(A.Settings.DefaultTimesheetView);
 
-        _viewToggle = new SegmentedToggle("Totals", "Calendar", _viewMode == ViewMode.Calendar ? 1 : 0, fontSize: 11.5);
+        _viewToggle = new SegmentedToggle(new[] { "Totals", "Calendar", "Project" }, ModeIndex(_viewMode), fontSize: 11.5);
         _viewToggle.SelectionChanged += ApplyViewModeChange;
         ViewToggleHost.Content = _viewToggle.Root;
         InitTimesheetSettingsPopover();
@@ -169,22 +179,26 @@ public partial class TimesheetWindow : Window
     /// programmatic switch has to run this body itself rather than piggyback on the event.</summary>
     private void ApplyViewModeChange(int idx)
     {
-        _viewMode = idx == 1 ? ViewMode.Calendar : ViewMode.Bar;
+        _viewMode = (ViewMode)idx;
+        if (_viewMode == ViewMode.Project)
+        {
+            _monthStart = StartOfMonth(_weekStart);
+            _projectScrollOffset = 0;
+        }
         _calendarScrollOffset = null; // re-center on work hours each time Calendar is switched into
         CalendarPxPerHour = 60; // and reset any zoom from a prior calendar session
         RenderCurrentWeek(0, crossFade: true);
         UpdateMergeToggleVisibility(animate: true);
         // Remember this as the view a fresh open should resume on — see ViewMode's remarks.
-        A.Settings.DefaultTimesheetView = _viewMode == ViewMode.Calendar ? "Calendar" : "Bar";
+        A.Settings.DefaultTimesheetView = ModeToSetting(_viewMode);
         A.Store.SaveSettings(A.Settings);
     }
 
-    /// <summary>Programmatically switch view (Totals/Calendar) — used by the tutorial to drive
+    /// <summary>Programmatically switch view (0 Totals, 1 Calendar, 2 Project) — used by the tutorial to drive
     /// the walkthrough without simulating a click on the toggle itself. A no-op if already on the
     /// requested view.</summary>
-    internal void SelectView(bool calendar)
+    internal void SelectView(int idx)
     {
-        int idx = calendar ? 1 : 0;
         if (_viewToggle.SelectedIndex == idx) return;
         _viewToggle.SetIndex(idx, animate: true);
         ApplyViewModeChange(idx);
@@ -228,7 +242,11 @@ public partial class TimesheetWindow : Window
         // flicker bug for someone who happens to be hovering a block in a week that isn't the
         // current one while a tick fires.
         var today = DateTime.Today;
-        if (today < _weekStart || today >= _weekStart.AddDays(7)) return;
+        if (_viewMode == ViewMode.Project)
+        {
+            if (today < _monthStart || today >= _monthStart.AddMonths(1)) return;
+        }
+        else if (today < _weekStart || today >= _weekStart.AddDays(7)) return;
 
         if (TryUpdateLiveCalendarInPlace(out double weekTotalHours))
         {
@@ -319,7 +337,7 @@ public partial class TimesheetWindow : Window
     public void AnimateOpenFrom(Window origin)
     {
         var wa = WorkAreaFor(origin);
-        double targetW = Math.Min(980, wa.Width - 80);
+        double targetW = Math.Min(1127, wa.Width - 80);
         double targetH = Math.Min(680, wa.Height - 80);
         double targetLeft = Clamp(origin.Left + origin.Width / 2 - targetW / 2, wa.Left + 16, wa.Right - targetW - 16);
         double targetTop = Clamp(origin.Top + origin.Height / 2 - targetH / 2, wa.Top + 16, wa.Bottom - targetH - 16);
@@ -351,6 +369,8 @@ public partial class TimesheetWindow : Window
         ScaleXform.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(0.96, 1, TimeSpan.FromMilliseconds(220)) { EasingFunction = ease });
 
         _weekStart = StartOfWeek(DateTime.Today);
+        _monthStart = StartOfMonth(DateTime.Today);
+        _projectScrollOffset = 0;
         // The window is reused across opens, so a stale cache from the last time it was open
         // (possibly still keyed to this same week) must not survive a reopen — otherwise
         // whatever got tracked while it was closed wouldn't show up until the cache happened
@@ -358,10 +378,10 @@ public partial class TimesheetWindow : Window
         _cachedWeekStart = null;
         // Likewise, the view mode resets to the configured default each time the window is
         // (re)opened rather than remembering whatever it was left on — see ViewMode's remarks.
-        _viewMode = A.Settings.DefaultTimesheetView == "Calendar" ? ViewMode.Calendar : ViewMode.Bar;
+        _viewMode = ModeFromSetting(A.Settings.DefaultTimesheetView);
         _calendarScrollOffset = null;
         CalendarPxPerHour = 60;
-        _viewToggle.SetIndex(_viewMode == ViewMode.Calendar ? 1 : 0, animate: false);
+        _viewToggle.SetIndex(ModeIndex(_viewMode), animate: false);
         UpdateMergeToggleVisibility(animate: false);
         RenderCurrentWeek(0); // bounds are already final, so this renders at the correct size immediately
     }
@@ -439,7 +459,15 @@ public partial class TimesheetWindow : Window
     private void Navigate(int weeks)
     {
         if (SuspendRerender) return; // mouse is captured mid-drag (or a delete confirm is showing) — rebuilding now would tear either out from under the user
-        _weekStart = _weekStart.AddDays(7 * weeks);
+        if (_viewMode == ViewMode.Project)
+        {
+            _monthStart = _monthStart.AddMonths(weeks); // one step = one month in Project view
+            _projectScrollOffset = 0;
+        }
+        else
+        {
+            _weekStart = _weekStart.AddDays(7 * weeks);
+        }
         RenderCurrentWeek(weeks);
     }
 
@@ -587,7 +615,8 @@ public partial class TimesheetWindow : Window
             tooltip: "Merge every session for a project into one bar.\nOff: only back-to-back sessions with a matching note merge — the same project touched again later gets its own bar.");
         _mergeSessionsToggle.Toggled += on =>
         {
-            A.Settings.ChartMergeAllSessions = on;
+            if (_viewMode == ViewMode.Project) A.Settings.ProjectViewMergeSessions = on;
+            else A.Settings.ChartMergeAllSessions = on;
             A.Store.SaveSettings(A.Settings);
             RenderCurrentWeek(0);
         };
@@ -612,6 +641,13 @@ public partial class TimesheetWindow : Window
     private void UpdateMergeToggleVisibility(bool animate)
     {
         bool show = _viewMode != ViewMode.Calendar;
+        // Totals and Project views each keep their own merge setting, so the one shared switch
+        // re-syncs to whichever view is showing.
+        bool project = _viewMode == ViewMode.Project;
+        _mergeSessionsToggle.SetOn(project ? A.Settings.ProjectViewMergeSessions : A.Settings.ChartMergeAllSessions, animate: false);
+        _mergeSessionsToggle.Root.ToolTip = project
+            ? "Merge every session for a project into one block.\nOff: each session is its own block."
+            : "Merge every session for a project into one bar.\nOff: only back-to-back sessions with a matching note merge — the same project touched again later gets its own bar.";
         MergeSessionsPanel.IsHitTestVisible = show;
         double target = show ? 1 : 0;
         MergeSessionsPanel.BeginAnimation(OpacityProperty, null); // stop any in-flight fade first
@@ -686,16 +722,29 @@ public partial class TimesheetWindow : Window
         w.ShowDialog();
     }
 
-    private List<TimeBlock> GetWeekBlocks()
+    private DateTime _cachedRangeEnd;
+
+    // _cachedWeekStart doubles as the cached range's start for the month fetch too — every
+    // existing "_cachedWeekStart = null" invalidation therefore covers both views.
+    private List<TimeBlock> GetBlocks(DateTime from, DateTime toInclusive)
     {
-        if (_cachedWeekStart == _weekStart && _cachedBlocks is not null) return _cachedBlocks;
-        _cachedBlocks = A.Log.ReadRange(_weekStart, _weekStart.AddDays(6));
-        _cachedWeekStart = _weekStart;
+        if (_cachedWeekStart == from && _cachedRangeEnd == toInclusive && _cachedBlocks is not null) return _cachedBlocks;
+        _cachedBlocks = A.Log.ReadRange(from, toInclusive);
+        _cachedWeekStart = from;
+        _cachedRangeEnd = toInclusive;
         return _cachedBlocks;
     }
 
+    private List<TimeBlock> GetWeekBlocks() => GetBlocks(_weekStart, _weekStart.AddDays(6));
+
     private void RenderCurrentWeek(int slideDirection, bool crossFade = false)
     {
+        if (_viewMode == ViewMode.Project)
+        {
+            RenderCurrentMonth(slideDirection, crossFade);
+            return;
+        }
+        TotalEyebrow.Text = "WEEK TOTAL";
         WeekLabel.Text = FormatWeekLabel(_weekStart);
 
         // Raw blocks per day (chronological), not pre-aggregated — grouping into bar segments
@@ -748,7 +797,198 @@ public partial class TimesheetWindow : Window
             : BuildChart(byDay, liveBlock, w, h, today);
         if (crossFade) CrossFade(visual);
         else SlideIn(visual, slideDirection);
-        RebuildLegend(byDay);
+        RebuildLegend(byDay.Values.SelectMany(d => d), "week");
+    }
+
+    // ==================== project (per-project month) view ====================
+
+    private void RenderCurrentMonth(int slideDirection, bool crossFade)
+    {
+        TotalEyebrow.Text = "MONTH TOTAL";
+        WeekLabel.Text = _monthStart.ToString("MMMM yyyy");
+
+        var monthEnd = _monthStart.AddMonths(1).AddDays(-1);
+        var projects = A.Tracker.Projects.Where(p => p.Enabled).OrderBy(p => p.Order).ToList();
+        var byProject = projects.ToDictionary(p => p.Id, _ => new List<TimeBlock>(), StringComparer.Ordinal);
+
+        var shown = new List<TimeBlock>();
+        foreach (var b in GetBlocks(_monthStart, monthEnd))
+        {
+            var p = A.Tracker.FindByBlock(b);
+            if (p is null || !byProject.TryGetValue(p.Id, out var list)) continue;
+            list.Add(b);
+            shown.Add(b);
+        }
+
+        // The still-running block isn't in the CSV yet — fold it in as a synthetic block, as the
+        // Totals view does, so it grows live (and is the one block HoursOf measures unrounded).
+        TimeBlock? liveBlock = null;
+        if (A.Tracker.IsRunning && A.Tracker.Active is { } active && A.Tracker.State.BlockStartUtc is DateTime startUtc
+            && byProject.TryGetValue(active.Id, out var activeList)
+            && startUtc.ToLocalTime().Date >= _monthStart && startUtc.ToLocalTime().Date <= monthEnd)
+        {
+            liveBlock = new TimeBlock
+            {
+                ProjectId = active.Id, ProjectCode = active.Code, Asn = active.Asn, ProjectName = active.Name,
+                StartLocal = startUtc.ToLocalTime(), EndLocal = DateTime.Now,
+                DurationSeconds = A.Tracker.CurrentElapsedSeconds, Notes = "",
+            };
+            activeList.Add(liveBlock);
+            shown.Add(liveBlock);
+        }
+        foreach (var list in byProject.Values) list.Sort((a, b) => a.StartLocal.CompareTo(b.StartLocal));
+
+        WeekTotalText.Text = $"{shown.Sum(b => HoursOf(b, liveBlock)):0.0} h";
+
+        double w = ChartCard.ActualWidth > 40 ? ChartCard.ActualWidth - 40 : 820;
+        double h = ChartCard.ActualHeight > 40 ? ChartCard.ActualHeight - 40 : 440;
+        var visual = BuildProjectView(projects, byProject, liveBlock, w, h);
+        if (crossFade) CrossFade(visual);
+        else SlideIn(visual, slideDirection);
+        RebuildLegend(shown, "month");
+    }
+
+    private List<ChartSegment> BuildProjectSegments(Project p, List<TimeBlock> blocks, TimeBlock? liveBlock)
+    {
+        var segs = new List<ChartSegment>();
+        var fill = ColorUtil.Brush(p.Color);
+        var sessions = blocks.Where(b => HoursOf(b, liveBlock) > 0).ToList();
+        if (sessions.Count == 0) return segs;
+
+        if (A.Settings.ProjectViewMergeSessions)
+        {
+            double total = sessions.Sum(b => HoursOf(b, liveBlock));
+            bool live = sessions.Any(b => ReferenceEquals(b, liveBlock));
+            string count = $"{sessions.Count} session{(sessions.Count == 1 ? "" : "s")}";
+            var lines = sessions.Take(12).Select(b => $"{b.StartLocal:MMM d} · {HoursOf(b, liveBlock):0.0} h");
+            string tip = $"{p.Code} · {count} · {total:0.0} h{(live ? " · recording now" : "")}\n" + string.Join("\n", lines);
+            if (sessions.Count > 12) tip += $"\n… and {sessions.Count - 12} more";
+            segs.Add(new ChartSegment($"{total:0.#}h · {count}", p.Asn, total, fill, tip, sessions[^1].EndLocal, live));
+            return segs;
+        }
+
+        foreach (var b in sessions)
+        {
+            double hours = HoursOf(b, liveBlock);
+            bool live = ReferenceEquals(b, liveBlock);
+            string when = b.Unscheduled
+                ? $"{b.StartLocal:ddd MMM d} · by amount"
+                : $"{b.StartLocal:ddd MMM d}\n{b.StartLocal:h:mm tt} – {b.EndLocal:h:mm tt}";
+            string tip = $"{p.Code} · {hours:0.0} h{(live ? " · recording now" : "")}\n{when}";
+            if (!string.IsNullOrWhiteSpace(b.Notes)) tip += $"\nNote: {b.Notes}";
+            segs.Add(new ChartSegment($"{b.StartLocal:MMM d} · {hours:0.#}h", p.Asn, hours, fill, tip, b.StartLocal, live));
+        }
+        return segs;
+    }
+
+    private FrameworkElement BuildProjectView(List<Project> projects, Dictionary<string, List<TimeBlock>> byProject,
+        TimeBlock? liveBlock, double width, double height)
+    {
+        var dimBrush = (Brush)FindResource("TextDim");
+        var faintBrush = (Brush)FindResource("TextFaint");
+
+        if (projects.Count == 0)
+        {
+            return new TextBlock
+            {
+                Text = "No active projects.", FontSize = 13, Foreground = faintBrush,
+                Width = width, Height = height, TextAlignment = TextAlignment.Center, Padding = new Thickness(0, height / 3, 0, 0),
+            };
+        }
+
+        var gridBrush = (Brush)FindResource("Border");
+        var monoFont = (FontFamily)FindResource("MonoFont");
+
+        var segsByProject = projects.ToDictionary(p => p.Id, p => BuildProjectSegments(p, byProject[p.Id], liveBlock), StringComparer.Ordinal);
+        double rawMax = segsByProject.Values.Select(s => s.Sum(x => x.Hours)).DefaultIfEmpty(0).Max();
+        var (axisMax, step) = ComputeAxisScale(rawMax);
+
+        const double yAxisW = 40;
+        const double xAxisH = 40;
+        const double minColW = 84;
+        const double scrollBarH = 18;
+        double viewW = Math.Max(80, width - yAxisW);
+        bool needScroll = minColW * projects.Count > viewW;
+        double colW = Math.Max(minColW, viewW / projects.Count);
+        double plotH = Math.Max(60, height - xAxisH - (needScroll ? scrollBarH : 0));
+        double barW = Math.Max(24, Math.Min(110, colW - 16));
+        double plotW = colW * projects.Count;
+
+        var axis = new Canvas { Width = yAxisW, Height = plotH + xAxisH };
+        var canvas = new Canvas { Width = plotW, Height = plotH + xAxisH };
+        int lines = (int)Math.Round(axisMax / step);
+        for (int i = 0; i <= lines; i++)
+        {
+            double y = plotH - (i * step / axisMax) * plotH;
+            canvas.Children.Add(new Line
+            {
+                X1 = 0, X2 = plotW, Y1 = y, Y2 = y, Stroke = gridBrush, StrokeThickness = 1, SnapsToDevicePixels = true,
+            });
+            var label = new TextBlock
+            {
+                Text = $"{i * step:0}h", FontSize = 10.5, Foreground = faintBrush, FontFamily = monoFont,
+                Width = yAxisW - 8, TextAlignment = TextAlignment.Right,
+            };
+            Canvas.SetTop(label, Math.Max(0, y - 7));
+            axis.Children.Add(label);
+        }
+
+        const double segGap = 2;
+        for (int i = 0; i < projects.Count; i++)
+        {
+            var p = projects[i];
+            var segs = segsByProject[p.Id];
+            double colLeft = colW * i;
+            double cx = colLeft + colW / 2;
+
+            // Gaps are carved out of the stack's own height so the column's top lands exactly at
+            // its total on the axis no matter how many sessions it's split into (see BuildChart).
+            double total = segs.Sum(s => s.Hours);
+            double available = Math.Max(0, total / axisMax * plotH - Math.Max(0, segs.Count - 1) * segGap);
+            double yCursor = plotH;
+            foreach (var s in segs)
+            {
+                double segH = total > 0 ? Math.Max(2, s.Hours / total * available) : 2;
+                var block = MakeSegmentBlock(s, barW, segH);
+                Canvas.SetLeft(block, cx - barW / 2);
+                Canvas.SetTop(block, yCursor - segH);
+                canvas.Children.Add(block);
+                yCursor -= segH + segGap;
+            }
+
+            var footer = new StackPanel { Width = colW, ToolTip = string.IsNullOrWhiteSpace(p.Name) ? p.Code : $"{p.Code} · {p.Name}" };
+            footer.Children.Add(new TextBlock
+            {
+                Text = p.Code, FontSize = 11.5, FontWeight = FontWeights.Medium, Foreground = dimBrush,
+                TextAlignment = TextAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(4, 0, 4, 0),
+            });
+            footer.Children.Add(new TextBlock
+            {
+                Text = $"{total:0.0} h", FontSize = 9.5, Foreground = faintBrush, TextAlignment = TextAlignment.Center,
+            });
+            Canvas.SetLeft(footer, colLeft);
+            Canvas.SetTop(footer, plotH + 4);
+            canvas.Children.Add(footer);
+        }
+
+        var sv = new ScrollViewer
+        {
+            HorizontalScrollBarVisibility = needScroll ? ScrollBarVisibility.Auto : ScrollBarVisibility.Disabled,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            Content = canvas,
+        };
+        // The ScrollViewer would otherwise swallow the wheel; here the wheel pans months, like the other views.
+        sv.PreviewMouseWheel += (s, e) => ChartArea_MouseWheel(s, e);
+        sv.ScrollChanged += (_, e) => { if (e.HorizontalChange != 0) _projectScrollOffset = sv.HorizontalOffset; };
+        sv.Loaded += (_, _) => { if (_projectScrollOffset > 0) sv.ScrollToHorizontalOffset(_projectScrollOffset); };
+
+        var root = new Grid { Width = width, Height = height };
+        root.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(yAxisW) });
+        root.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        root.Children.Add(axis);
+        Grid.SetColumn(sv, 1);
+        root.Children.Add(sv);
+        return root;
     }
 
     /// <summary>Hours contributed by one block to a chart total — the live block uses raw
@@ -933,6 +1173,71 @@ public partial class TimesheetWindow : Window
         return kept.OrderBy(s => s.OrderKey).ToList();
     }
 
+    /// <summary>One stacked-bar block — fill, live outline/pulse, and height-gated labels (title
+    /// at 20px, ASN at 36px). Shared by the Totals and Project views.</summary>
+    private Border MakeSegmentBlock(ChartSegment seg0, double barW, double segH)
+    {
+        var baseColor = ((SolidColorBrush)seg0.Fill).Color;
+
+        var seg = new Border
+        {
+            Width = barW, Height = segH,
+            Background = seg0.Fill,
+            CornerRadius = new CornerRadius(4),
+            ToolTip = seg0.Tooltip,
+            ClipToBounds = true,
+        };
+        // A border (not text) is the primary "live" cue since it reads even on a 2px sliver; it's
+        // a brighter tint of the segment's own colour rather than the unrelated red "Live" accent.
+        if (seg0.IsLive)
+        {
+            var liveBorder = new SolidColorBrush(Lighten(baseColor, 0.4));
+            seg.BorderBrush = liveBorder;
+            seg.BorderThickness = new Thickness(2);
+            liveBorder.BeginAnimation(SolidColorBrush.OpacityProperty, BreathingAnimation(0.55, 1.0, TimeSpan.FromMilliseconds(900)));
+        }
+
+        var content = new Grid();
+        if (segH >= 20)
+        {
+            var ink = new SolidColorBrush(SystemAccent.ReadableInk(baseColor));
+            var labels = new StackPanel { VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(6, 4, 6, 2) };
+
+            var title = new TextBlock
+            {
+                Text = seg0.Label, FontSize = 11, FontWeight = FontWeights.SemiBold, Foreground = ink,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+            };
+            if (seg0.IsLive)
+            {
+                var titleRow = new StackPanel { Orientation = Orientation.Horizontal };
+                titleRow.Children.Add(title);
+                var dot = new TextBlock { Text = "  ●", FontSize = 11, FontWeight = FontWeights.SemiBold, Foreground = ink };
+                // Phase-locked (see BreathingAnimation) because the live segment is rebuilt every second.
+                dot.BeginAnimation(OpacityProperty, BreathingAnimation(1.0, 0.3, TimeSpan.FromMilliseconds(900)));
+                titleRow.Children.Add(dot);
+                labels.Children.Add(titleRow);
+            }
+            else
+            {
+                labels.Children.Add(title);
+            }
+
+            if (segH >= 36 && !string.IsNullOrEmpty(seg0.Asn))
+            {
+                labels.Children.Add(new TextBlock
+                {
+                    Text = $"ASN {seg0.Asn}", FontSize = 9, Foreground = ink, Opacity = 0.85,
+                    TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 1, 0, 0),
+                });
+            }
+            content.Children.Add(labels);
+        }
+
+        seg.Child = content;
+        return seg;
+    }
+
     private FrameworkElement BuildChart(Dictionary<DateTime, List<TimeBlock>> byDay, TimeBlock? liveBlock,
         double width, double height, DateTime today)
     {
@@ -1037,87 +1342,7 @@ public partial class TimesheetWindow : Window
             foreach (var seg0 in segments)
             {
                 double segH = dayTotalHours > 0 ? Math.Max(2, seg0.Hours / dayTotalHours * availableForBars) : 2;
-                var baseColor = ((SolidColorBrush)seg0.Fill).Color;
-
-                var seg = new Border
-                {
-                    Width = barW, Height = segH,
-                    Background = seg0.Fill,
-                    CornerRadius = new CornerRadius(4),
-                    ToolTip = seg0.Tooltip,
-                    ClipToBounds = true,
-                };
-                // The still-running segment gets its own outline regardless of height — a border
-                // reads even on a 2px-tall sliver, unlike text, so it's the primary "this one's
-                // live" cue; the pulsing dot next to the label below adds further reinforcement
-                // once there's room for it. The border is a brighter tint of the segment's OWN
-                // colour, not the unrelated red "Live" accent — an orange/red ring around e.g. a
-                // green bar read as a mismatched box slapped on top rather than a highlighted
-                // version of the same project.
-                if (seg0.IsLive)
-                {
-                    var liveBorder = new SolidColorBrush(Lighten(baseColor, 0.4));
-                    seg.BorderBrush = liveBorder;
-                    seg.BorderThickness = new Thickness(2);
-                    liveBorder.BeginAnimation(SolidColorBrush.OpacityProperty, BreathingAnimation(0.55, 1.0, TimeSpan.FromMilliseconds(900)));
-                }
-
-                var content = new Grid();
-
-                // Only label the segment in-place if it's tall enough to hold readable text;
-                // short segments keep the tooltip as their only label. Hours always pairs with
-                // the code (the number that matters most); ASN (when there is one — "Other"
-                // has none) only shows up once there's room for a second line. Anchored to the
-                // top edge rather than centred, so it doesn't drift as the segment's height
-                // changes from one render to the next.
-                if (segH >= 20)
-                {
-                    var ink = new SolidColorBrush(SystemAccent.ReadableInk(baseColor));
-                    var labels = new StackPanel { VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(6, 4, 6, 2) };
-
-                    if (seg0.IsLive)
-                    {
-                        var titleRow = new StackPanel { Orientation = Orientation.Horizontal };
-                        titleRow.Children.Add(new TextBlock
-                        {
-                            Text = seg0.Label, FontSize = 11, FontWeight = FontWeights.SemiBold, Foreground = ink,
-                            TextTrimming = TextTrimming.CharacterEllipsis,
-                        });
-                        var dot = new TextBlock
-                        {
-                            Text = "  ●", FontSize = 11, FontWeight = FontWeights.SemiBold, Foreground = ink,
-                        };
-                        // A small pulsing dot next to the label — not a full-surface texture —
-                        // is the "still recording" cue, matching how the rest of the app marks
-                        // "live" (the REC badge, the switcher's LIVE row) with a small accent
-                        // glyph rather than dressing up the whole surface. Phase-locked (see
-                        // BreathingAnimation) rather than one-shot, since this window rebuilds
-                        // the live segment from scratch every second regardless.
-                        dot.BeginAnimation(OpacityProperty, BreathingAnimation(1.0, 0.3, TimeSpan.FromMilliseconds(900)));
-                        titleRow.Children.Add(dot);
-                        labels.Children.Add(titleRow);
-                    }
-                    else
-                    {
-                        labels.Children.Add(new TextBlock
-                        {
-                            Text = seg0.Label, FontSize = 11, FontWeight = FontWeights.SemiBold, Foreground = ink,
-                            TextTrimming = TextTrimming.CharacterEllipsis,
-                        });
-                    }
-
-                    if (segH >= 36 && seg0.Asn is not null)
-                    {
-                        labels.Children.Add(new TextBlock
-                        {
-                            Text = $"ASN {seg0.Asn}", FontSize = 9, Foreground = ink, Opacity = 0.85,
-                            TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 1, 0, 0),
-                        });
-                    }
-                    content.Children.Add(labels);
-                }
-
-                seg.Child = content;
+                var seg = MakeSegmentBlock(seg0, barW, segH);
                 Canvas.SetLeft(seg, cx - barW / 2);
                 Canvas.SetTop(seg, yCursor - segH);
                 canvas.Children.Add(seg);
@@ -2321,13 +2546,13 @@ public partial class TimesheetWindow : Window
         old.BeginAnimation(OpacityProperty, new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(240)));
     }
 
-    private void RebuildLegend(Dictionary<DateTime, List<TimeBlock>> byDay)
+    private void RebuildLegend(IEnumerable<TimeBlock> blocks, string period)
     {
         Legend.Children.Clear();
         // Resolved by Id (not raw ProjectCode) so a project renamed mid-week still shows up for
         // days it was tracked under its old code — see TrackerService.FindByBlock.
         var activeIds = new HashSet<string>(
-            byDay.Values.SelectMany(d => d.Select(b => A.Tracker.FindByBlock(b)?.Id)).OfType<string>(),
+            blocks.Select(b => A.Tracker.FindByBlock(b)?.Id).OfType<string>(),
             StringComparer.Ordinal);
 
         foreach (var p in A.Tracker.Projects)
@@ -2351,7 +2576,7 @@ public partial class TimesheetWindow : Window
         {
             Legend.Children.Add(new TextBlock
             {
-                Text = "No tracked time this week.", FontSize = 12, Foreground = (Brush)FindResource("TextFaint"),
+                Text = $"No tracked time this {period}.", FontSize = 12, Foreground = (Brush)FindResource("TextFaint"),
             });
         }
     }

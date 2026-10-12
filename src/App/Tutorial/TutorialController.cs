@@ -25,7 +25,7 @@ internal sealed class TutorialController
     private bool _running;
 
     /// <summary>The user's actual default-view preference, captured on Start and restored on
-    /// Finish/Skip — steps 5 and 8 force Totals then Calendar to demonstrate both (see their own
+    /// Finish/Skip — the timesheet steps force Totals, Calendar, then Project to demonstrate each (see their own
     /// OnEnter), and SelectView persists that switch exactly like a real click would, so without
     /// this a completed tour would silently leave the user's saved default on whichever view the
     /// tour happened to end its demo on, rather than whatever they'd actually chosen before.</summary>
@@ -71,7 +71,7 @@ internal sealed class TutorialController
         // timesheet window or a dimmed screen.
         if (A.IsTimesheetsVisible) A.CloseTimesheets(); else A.ShowMainWindow();
 
-        // Undo the view-switching side effect of steps 5/8 demonstrating both views (see
+        // Undo the view-switching side effect of the tour demonstrating each view (see
         // _originalDefaultView's own remarks) — the window itself self-corrects on its next open
         // (AnimateOpenFrom always re-reads Settings.DefaultTimesheetView fresh), so restoring the
         // persisted setting here is the only piece that needs undoing by hand.
@@ -201,15 +201,15 @@ internal sealed class TutorialController
             Host = TutorialHost.MainWindow,
             ResolveTarget = () => A.MainWindowRef.TimesheetsBtn,
             Title = "See where your time went",
-            Body = "The timesheets view shows a full week of tracked time, two different ways. Let's take a look.",
+            Body = "The timesheets view shows your tracked time three different ways — by week, by time of day, and by project. Let's take a look.",
         },
         new TutorialStep
         {
             Host = TutorialHost.TimesheetWindow,
             ResolveTarget = () => A.EnsureTimesheets().ViewToggleHost,
-            OnEnter = () => A.EnsureTimesheets().SelectView(calendar: false),
+            OnEnter = () => A.EnsureTimesheets().SelectView(0),
             Title = "Totals and Calendar",
-            Body = "Totals stacks up each day's hours by project. Calendar — the other tab here — lays them out across the day instead; we'll switch to it shortly.",
+            Body = "Totals stacks up each day's hours by project. Calendar lays them out across the day instead, and Project shows a whole month per project — we'll visit both shortly.",
         },
         new TutorialStep
         {
@@ -229,7 +229,7 @@ internal sealed class TutorialController
         {
             Host = TutorialHost.TimesheetWindow,
             ResolveTarget = () => A.EnsureTimesheets().ViewToggleHost,
-            OnEnter = () => A.EnsureTimesheets().SelectView(calendar: true),
+            OnEnter = () => A.EnsureTimesheets().SelectView(1),
             Title = "The Calendar view",
             Body = "Calendar lays your day out by time-of-day instead of totals — and it's where you can add, move, resize, and delete time directly. Let's try each of those.",
         },
@@ -264,6 +264,14 @@ internal sealed class TutorialController
             Ghost = GhostDemo.Delete,
             Title = "Delete a block",
             Body = "Hover a block and click the ✕ that appears, then confirm — gone.",
+        },
+        new TutorialStep
+        {
+            Host = TutorialHost.TimesheetWindow,
+            ResolveTarget = () => A.EnsureTimesheets().ViewToggleHost,
+            OnEnter = () => A.EnsureTimesheets().SelectView(2),
+            Title = "The Project view",
+            Body = "Project shows one bar per active project for the whole month, built from a block for each session. Use the arrows or scroll to move between months, and its own Merge sessions switch (off by default) collapses each project into a single block.",
         },
         new TutorialStep
         {

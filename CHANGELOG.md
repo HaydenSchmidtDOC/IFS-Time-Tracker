@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.6.1] Beta — 2026-10-13
+
+### New
+
+- **Project view.** The timesheet's Totals / Calendar toggle gains a third option, Project: one vertical
+  bar per enabled project for the displayed month, built from one block per session (height = duration).
+  Scrolling or the arrows step by month. Its own Merge sessions switch (off by default) collapses each
+  project's sessions into a single block.
+
 ## [0.6.0] Beta — 2026-09-24
 
 ### New

@@ -150,7 +150,7 @@
 
                 <StackPanel Grid.Column="0" HorizontalAlignment="Left" VerticalAlignment="Center"
                             shell:WindowChrome.IsHitTestVisibleInChrome="True">
-                    <TextBlock Text="WEEK TOTAL" Style="{StaticResource EyebrowText}"/>
+                    <TextBlock x:Name="TotalEyebrow" Text="WEEK TOTAL" Style="{StaticResource EyebrowText}"/>
                     <TextBlock x:Name="WeekTotalText" Text="0.0 h" FontSize="18" FontWeight="SemiBold"
                                FontFamily="{StaticResource MonoFont}" Foreground="{DynamicResource Text}"/>
                 </StackPanel>
@@ -162,20 +162,20 @@
                             HorizontalAlignment="Center" VerticalAlignment="Center"
                             MouseWheel="ChartArea_MouseWheel"
                             shell:WindowChrome.IsHitTestVisibleInChrome="True">
-                    <Button Content="◂" Click="PrevWeek_Click" Style="{StaticResource Btn}" Padding="10,7" ToolTip="Previous week"/>
+                    <Button Content="◂" Click="PrevWeek_Click" Style="{StaticResource Btn}" Padding="10,7" ToolTip="Previous"/>
                     <TextBlock x:Name="WeekLabel" FontSize="14" FontWeight="SemiBold" MinWidth="230"
                                TextAlignment="Center" VerticalAlignment="Center" Margin="14,0"
                                Foreground="{DynamicResource Text}" FontFamily="{StaticResource MonoFont}"/>
-                    <Button Content="▸" Click="NextWeek_Click" Style="{StaticResource Btn}" Padding="10,7" ToolTip="Next week"/>
+                    <Button Content="▸" Click="NextWeek_Click" Style="{StaticResource Btn}" Padding="10,7" ToolTip="Next"/>
                 </StackPanel>
 
                 <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center"
                             shell:WindowChrome.IsHitTestVisibleInChrome="True">
                     <Button x:Name="AddTimeBtn" Content="＋" Click="AddTime_Click" Style="{StaticResource IconBtn}" FontSize="14"
                             Margin="0,0,10,0" ToolTip="Add time manually"/>
-                    <!-- Populated in code-behind: SegmentedToggle (Totals/Calendar) has no XAML
+                    <!-- Populated in code-behind: SegmentedToggle (Totals/Calendar/Project) has no XAML
                          template of its own — see TimesheetWindow ctor. -->
-                    <ContentControl x:Name="ViewToggleHost" Focusable="False" Margin="0,0,14,0" Width="150"/>
+                    <ContentControl x:Name="ViewToggleHost" Focusable="False" Margin="0,0,14,0" Width="230"/>
                     <Button Content="—" Click="Minimize_Click" Style="{StaticResource IconBtn}" FontSize="13"/>
                     <Button x:Name="MaxRestoreBtn" Content="▢" Click="MaxRestore_Click" Style="{StaticResource IconBtn}" FontSize="11"/>
                     <Button Content="✕" Click="Close_Click" Style="{StaticResource IconBtn}" FontSize="12"/>

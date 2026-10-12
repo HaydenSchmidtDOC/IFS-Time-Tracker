@@ -106,6 +106,11 @@ public sealed class Settings
     /// configured fixed default.</summary>
     public string DefaultTimesheetView { get; set; } = "Bar";
 
+    /// <summary>Project view only: when true, every session for a project this month merges into
+    /// one block; when false (default), each session is its own block. Independent of
+    /// <see cref="ChartMergeAllSessions"/>, which drives the Totals view.</summary>
+    public bool ProjectViewMergeSessions { get; set; } = false;
+
     /// <summary>
     /// Calendar-view dragging snaps to the nearest this-many minutes — covers resizing a block's
     /// top/bottom edge, moving a whole block, and drawing a new one via drag-to-add, all with the
