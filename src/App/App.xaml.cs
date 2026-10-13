@@ -742,13 +742,18 @@ public partial class App : Application
         try
         {
             Process.Start(psi);
-            QuitApp();
         }
         catch
         {
             TryDelete(tmp);
             await Dispatcher.InvokeAsync(() => InfoPrompt.Show("Update failed", "The updater couldn't be started. Please try again later.")).Task.ConfigureAwait(false);
+            return;
         }
+
+        // QuitApp touches WPF objects (tray, windows), and we're on a thread-pool thread after the
+        // ConfigureAwait(false) awaits above — it must run on the UI thread or it throws and the
+        // app never exits, leaving the updater waiting on it forever.
+        await Dispatcher.InvokeAsync(QuitApp).Task.ConfigureAwait(false);
     }
 
     /// <summary>
