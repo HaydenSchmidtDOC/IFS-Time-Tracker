@@ -1,119 +1,113 @@
 # IFS Time Tracker
 
-A small Windows desktop app for logging hours against work projects, in a shape that maps
-onto IFS ERP timesheets (project code + ASN number). Runs quietly in the background with a
-colour-tinted tray icon and an optional floating pill so the current project is visible at a
-glance, even minimised.
+A small Windows app for logging hours against work projects, in a shape that maps onto IFS
+timesheets (project code + ASN number). It sits in the tray with an optional floating pill so the
+current project is always visible, and it can record your Claude Code usage and cost per project.
 
-## Layout
+## Install
+
+1. Download `IFS-Time-Tracker.exe` from the
+   [latest release](https://github.com/HaydenSchmidtDOC/IFS-Time-Tracker/releases/latest).
+2. Put it in a folder you want to keep it in and run it. Nothing else to install; the .NET runtime
+   is bundled (the file is about 70 MB).
+3. Windows may show a SmartScreen warning because the exe is unsigned. Choose **More info → Run anyway**.
+4. A short tour starts on first launch. Add a project (code, ASN, colour) and you're tracking.
+
+Your data lives in a `data` folder created **next to the exe**, so keep the exe somewhere
+permanent (and back that folder up, or keep it in a synced folder such as OneDrive). To move
+to another machine, copy the exe and its `data` folder.
+
+### Updates
+
+The app checks GitHub Releases at most once a day and offers to update in place. You can also
+use **Settings → Updates → Check now**. Each new version shows a short "What's new" the first time
+it runs. Release history is in [CHANGELOG.md](CHANGELOG.md).
+
+## Using it
+
+- Select a project and press the round button (▶ start, ■ stop, ⇆ switch), or double-click a
+  project to start it. Selecting a project never starts it by itself.
+- **Ctrl+↑ / Ctrl+↓** works anywhere (even minimised) and opens the quick switcher: arrows or the
+  mouse wheel move, **Enter** or a double-click confirms.
+- The floating pill can be dragged, collapsed to a colour dot, and double-clicked to reopen the
+  main window.
+- If you step away, an idle prompt asks what to do with the time. A note prompt on stop is optional.
+
+### Timesheets
+
+Open the timesheets view from the main window. It has three views:
+
+- **Totals**: each day's hours stacked by project.
+- **Calendar**: your day laid out by time. Drag to add time, click a block to edit it, drag its
+  body to move it, drag its edges to resize, and hover then click ✕ to delete.
+- **Project**: one bar per project for the month.
+
+### AI usage tracking (Claude Code)
+
+On by default; turn it off in **Settings → AI usage**.
+
+- When a Claude Code session starts, a small picker asks which project it belongs to (click or
+  Enter to assign, Esc leaves it unassigned). It never steals focus from your terminal.
+- The main window shows today's AI cost next to the hours for each project.
+- In the timesheet, each bar reserves a narrow lane on the right for AI sessions, with a dollar
+  axis on the right. Hover a session for details; click it to move it to another project.
+- Which endpoints are tracked (Anthropic, Foundry, local, other) is configurable in Settings.
+
+Enabling it adds a `SessionStart` hook and a cost statusline to Claude Code's
+`~/.claude/settings.json` (a `.bak` copy is kept). Disabling removes them. Only Claude Code is
+supported so far; VS Code / Copilot is planned.
+
+### Exporting to IFS
+
+The monthly log (`data/log-YYYY-MM.csv`) can be re-mapped to the columns IFS expects through
+`IfsExportMapping` in `data/settings.json`: an ordered list of `{ Header, Field }` entries, where a
+field is a log column or a fixed `=text` value. Fields: `Date, ProjectCode, Asn, ProjectName,
+StartLocal, EndLocal, DurationSeconds, DurationHours, Notes`. Output goes to
+`data/ifs-export-YYYY-MM.csv`. There is no export button in the UI yet.
+
+## Your data
+
+Everything is plain files in the `data` folder:
+
+| File | Contents |
+| --- | --- |
+| `log-YYYY-MM.csv` | One row per tracked block, one file per month |
+| `projects.json`, `settings.json`, `state.json` | Projects, preferences, the running session |
+| `ai_sessions.json` | AI sessions and their costs |
+| `ifs-export-YYYY-MM.csv` | Generated exports |
+
+Nothing is sent anywhere except the update check against GitHub. See [SECURITY.md](SECURITY.md).
+
+## Building from source
+
+Requires the .NET 8 or newer SDK.
 
 ```
-TimeTracker/
-  src/
-    Core/   TimeTracker.Core.csproj   — tracking engine, storage, CSV, IFS export (no UI)
-    App/    TimeTracker.csproj        — WPF desktop app (net8.0-windows)
-  tests/    TimeTracker.Tests.csproj  — xunit tests for Core
-  data/                                — created next to the running exe: projects, state,
-                                          settings, and one log-YYYY-MM.csv per month
-  TimeTracker.slnx
-```
-
-`data/` lives next to the executable by default, which — because the app runs from inside
-this OneDrive-synced folder — means it syncs automatically. A future phone app is expected to
-read/write the same files (that shared format is the sync mechanism, not a network API).
-
-## Requirements
-
-Nothing to install to **run** the built app — the published `.exe` is self-contained.
-To **build** it, you need the .NET 8 or 10 SDK (already present on this machine:
-`dotnet --list-sdks`).
-
-## Day-to-day use
-
-- **Run**: `dotnet run --project src/App/TimeTracker.csproj`
-- **Test**: `dotnet test` (or `dotnet test TimeTracker.slnx`)
-- **Build everything**: `dotnet build TimeTracker.slnx`
-
-### Controls
-
-- Select a project in the list, then press the round button (▶ start / ■ stop / ⇆ switch) —
-  or double-click a project to start it immediately. Selecting never auto-starts.
-- **Ctrl+↑** / **Ctrl+↓** (global, works minimised) opens the quick switcher: ↑/↓ or the mouse
-  wheel move the highlight, **Enter** or a **double-click** confirms.
-- The floating pill can be dragged (with momentum — it drifts to a stop and settles to the
-  nearest screen edge), collapsed to just the colour dot by clicking the dot, and
-  double-clicked to reopen the main window. Its own button toggles start/stop.
-- Settings (⚙ in the main window) covers idle-prompt threshold, the note prompt, pill
-  visibility, project management, the data folder, and the IFS export mapping.
-
-### AI usage tracking
-
-Claude Code sessions can be recorded against projects (Settings → AI usage, on by default).
-Enabling it installs a `SessionStart` hook and a cost statusline into `~/.claude/settings.json`
-(a `.bak` copy is kept; disabling removes them). The hook script, `ai-hook.ps1`, lives in the
-data folder and sends one JSON line per event over the named pipe `TimeTracker.AiSessions`;
-sessions are stored in `ai_sessions.json`.
-
-- A new session opens a picker (no focus steal): Enter/click assigns it, Esc leaves it unassigned.
-- The main window shows today's cost per project; the timesheet reserves 15% of each bar for AI
-  sessions with a dollar axis on the right. Click a session to reassign it.
-- Settings lets you choose which endpoints are tracked (Anthropic, Foundry, local, ...) and
-  declare host overrides as `host=Class`.
-- Design and staging: `docs/AI-Usage-Tracking-Spec.md`. Stage 3 (VS Code/Copilot) is not built.
-
-## Packaging (single-file, no install required on the target machine)
-
-```
+dotnet run --project src/App/TimeTracker.csproj      # run
+dotnet test                                          # tests
 dotnet publish src/App/TimeTracker.csproj -c Release -p:PublishSelfContained=true -o dist
 ```
 
-This produces one `dist/IFS Time Tracker.exe` (~70 MB, .NET runtime bundled) that runs with
-nothing installed — verified by launching it directly outside the SDK build output. Copy that
-one file wherever it needs to live; a `data/` folder is created alongside it on first run.
+The publish step produces the single self-contained `dist/IFS Time Tracker.exe`.
 
-*(`-p:PublishSelfContained=true` is a project-local switch, not MSBuild's built-in
-`PublishProfile` — that name is reserved for `.pubxml` files, so a different one is used here
-to avoid a spurious "profile not found" warning.)*
+```
+src/Core   tracking engine, storage, CSV, IFS export, AI usage (no UI)
+src/App    WPF desktop app (net8.0-windows)
+tests/     xunit tests for Core
+docs/      design notes, e.g. AI-Usage-Tracking-Spec.md
+```
 
-### Releases & in-app updates
+`TrackerService` (`src/Core/TrackerService.cs`) is the single source of truth for
+start/switch/stop; extend behaviour there rather than in UI code-behind.
 
-Releases are published to **GitHub Releases** (see `.github/workflows/release.yml`): pushing a
-tag like `v0.6.0` builds the self-contained exe and uploads it alongside a `latest.json`
-metadata asset (version + asset URL + SHA256). The app checks that metadata at most once a day
-and offers to update in place when a newer version exists — no manual zip download needed.
+### Releasing
 
-To publish a release:
+1. Bump `<Version>` in `src/App/TimeTracker.csproj` and add a `CHANGELOG.md` entry.
+2. Merge to `main`, push, then tag and push the tag: `git tag v0.6.5 && git push origin v0.6.5`.
+3. `.github/workflows/release.yml` builds the exe and publishes it with a `latest.json`
+   (version, URL, SHA256) that the in-app updater reads. It only publishes if the tag points at
+   the head of `main`.
 
-1. Bump `<Version>` in `src/App/TimeTracker.csproj` (and add a `CHANGELOG.md` entry).
-2. Commit and push a matching tag: `git tag v0.6.0 && git push origin v0.6.0`.
-3. The workflow builds and uploads the release; the app will detect it on its next daily check
-   (or via Settings → Updates → "Check now").
-
-The update flow: the app downloads the new exe to a temp file, verifies its SHA256, then
-launches a second instance of itself with `--update` (see `App.TryHandleUpdateArgs`) which waits
-for the running app to exit, swaps the exe, and relaunches. The running exe is locked while the
-app is alive, so the swap is always done by that second instance.
-
-## IFS export mapping
-
-The internal monthly log (`data/log-YYYY-MM.csv`) is a rich superset: date, project code, ASN,
-name, start/end timestamps, duration in seconds *and* in decimal hours (rounded to the nearest
-0.1 h — i.e. nearest 6 minutes, not always rounded up), and an optional note.
-
-"Export month for IFS" (Settings) re-maps that log to whatever columns IFS actually expects,
-via `data/settings.json` → `IfsExportMapping`, an **ordered** list of `{ Header, Field }`
-pairs — ordered because column order matters for a CSV import and a plain dictionary doesn't
-guarantee enumeration order. `Field` is one of `Date, ProjectCode, Asn, ProjectName,
-StartLocal, EndLocal, DurationSeconds, DurationHours, Notes`, or a literal via `=text` (e.g.
-`=DOC` to hard-code a column to a fixed value). The Settings window edits this table directly,
-so once a real IFS timesheet export is available, matching it exactly is a settings change —
-no code change.
-
-## Notes for later work
-
-- The phone app is expected to read/write the same `data/` files (via the OneDrive folder)
-  rather than talk to this app directly — no sync protocol has been designed beyond "same
-  files, same folder."
-- `TrackerService` (src/Core/TrackerService.cs) is the single source of truth for start/switch/
-  stop and is fully unit-tested with an injectable clock — extend behaviour there, not in the
-  UI code-behind.
+The updater downloads the new exe, verifies its SHA256, then starts a second copy of itself with
+`--update` that waits for the running app to exit, swaps the exe, and relaunches (the running exe
+is locked, so the swap can't happen in-process).
