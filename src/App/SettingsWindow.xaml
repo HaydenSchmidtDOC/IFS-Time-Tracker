@@ -145,6 +145,31 @@
 
                     <Border Height="1" Background="{DynamicResource Border}" Margin="0,18"/>
 
+                    <!-- ===== AI usage ===== -->
+                    <TextBlock Text="AI USAGE" Style="{StaticResource EyebrowText}" Margin="0,0,0,8"/>
+                    <Grid Margin="0,0,0,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="Track AI coding sessions" FontSize="13"
+                                   Foreground="{DynamicResource Text}" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                        <ContentControl Grid.Column="1" x:Name="AiEnabledToggleHost" Focusable="False" VerticalAlignment="Center"/>
+                    </Grid>
+                    <TextBlock Text="Shows session cost in the main window and a coding-session lane in the timesheets."
+                               FontSize="11" Foreground="{DynamicResource TextFaint}" Margin="0,0,0,10" TextWrapping="Wrap"/>
+                    <TextBlock Text="ENDPOINTS TO TRACK" Style="{StaticResource EyebrowText}" Margin="0,0,0,4"/>
+                    <StackPanel x:Name="AiEndpointsPanel" Margin="0,0,0,10"/>
+                    <TextBlock Text="ENDPOINT OVERRIDES (host=Class, one per line)" Style="{StaticResource EyebrowText}" Margin="0,0,0,4"/>
+                    <TextBox x:Name="AiOverridesBox" Style="{StaticResource Input}" AcceptsReturn="True" MinHeight="48"
+                             TextWrapping="NoWrap" FontFamily="{StaticResource MonoFont}"/>
+                    <TextBlock Text="Declare a local proxy as Foundry/Anthropic, e.g. localhost:4000=Foundry."
+                               FontSize="11" Foreground="{DynamicResource TextFaint}" Margin="0,4,0,10" TextWrapping="Wrap"/>
+                    <!-- Hidden until the AI usage window is polished; handler and window are kept. -->
+                    <Button Content="Open AI usage…" Click="OpenAiUsage_Click" Style="{StaticResource Btn}" HorizontalAlignment="Left" Visibility="Collapsed"/>
+
+                    <Border Height="1" Background="{DynamicResource Border}" Margin="0,18"/>
+
                     <!-- ===== Projects ===== -->
                     <Grid Margin="0,0,0,8">
                         <TextBlock Text="PROJECTS" Style="{StaticResource EyebrowText}" VerticalAlignment="Center"/>

@@ -46,6 +46,21 @@ To **build** it, you need the .NET 8 or 10 SDK (already present on this machine:
 - Settings (⚙ in the main window) covers idle-prompt threshold, the note prompt, pill
   visibility, project management, the data folder, and the IFS export mapping.
 
+### AI usage tracking
+
+Claude Code sessions can be recorded against projects (Settings → AI usage, on by default).
+Enabling it installs a `SessionStart` hook and a cost statusline into `~/.claude/settings.json`
+(a `.bak` copy is kept; disabling removes them). The hook script, `ai-hook.ps1`, lives in the
+data folder and sends one JSON line per event over the named pipe `TimeTracker.AiSessions`;
+sessions are stored in `ai_sessions.json`.
+
+- A new session opens a picker (no focus steal): Enter/click assigns it, Esc leaves it unassigned.
+- The main window shows today's cost per project; the timesheet reserves 15% of each bar for AI
+  sessions with a dollar axis on the right. Click a session to reassign it.
+- Settings lets you choose which endpoints are tracked (Anthropic, Foundry, local, ...) and
+  declare host overrides as `host=Class`.
+- Design and staging: `docs/AI-Usage-Tracking-Spec.md`. Stage 3 (VS Code/Copilot) is not built.
+
 ## Packaging (single-file, no install required on the target machine)
 
 ```

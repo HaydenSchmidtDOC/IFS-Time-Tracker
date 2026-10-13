@@ -51,6 +51,8 @@ public partial class App : Application
     private MainWindow _main = null!;
     private PillWindow _pill = null!;
     private SwitcherWindow? _switcher;
+    private SwitcherWindow? _aiPicker;
+    private readonly Queue<AiSession> _aiPickQueue = new();
     private TimesheetWindow? _timesheets;
 
     /// <summary>Fires once a second so open windows can repaint the running timer.</summary>
@@ -135,6 +137,16 @@ public partial class App : Application
         Exporter = new IfsExporter(Log, Paths);
 
         AiSessions = new AiSessionService(Paths, () => Settings, () => Tracker.IsRunning ? Tracker.Active : null);
+        AiSessions.SessionStarted += s => Dispatcher.BeginInvoke(() => { _aiPickQueue.Enqueue(s); ShowNextAiPick(); });
+        if (Settings.AiTrackingEnabled)
+        {
+            try
+            {
+                var previous = ClaudeHookInstaller.Install(Paths, chain: Settings.AiChainedStatusLine);
+                if (previous is not null) { Settings.AiChainedStatusLine = previous; Store.SaveSettings(Settings); }
+            }
+            catch { /* settings.json unreadable; the toggle surfaces the error */ }
+        }
         _aiPipe = new AiPipeServer(msg =>
         {
             try
@@ -543,6 +555,15 @@ public partial class App : Application
         if (!Settings.PromptForNote) InfoPrompt.Show("Session ended", CollisionMessage(collision, ended: true));
     }
 
+    private void ShowNextAiPick()
+    {
+        if (_aiPicker is not null || _aiPickQueue.Count == 0) return;
+        var s = _aiPickQueue.Dequeue();
+        _aiPicker = new SwitcherWindow(s);
+        _aiPicker.Closed += (_, _) => { _aiPicker = null; ShowNextAiPick(); };
+        _aiPicker.Show(); // ShowActivated=false: the terminal keeps focus
+    }
+
     public void OpenSwitcher()
     {
         if (_switcher is { IsVisible: true }) { _switcher.Activate(); return; }
@@ -623,6 +644,48 @@ public partial class App : Application
         Settings.ShowAsnInMainList = visible;
         Store.SaveSettings(Settings);
         StateChanged?.Invoke();
+    }
+
+    /// <summary>Toggle AI usage tracking and persist; StateChanged drives the main window's cost column and width.</summary>
+    public void SetAiTrackingEnabled(bool on)
+    {
+        Settings.AiTrackingEnabled = on;
+        try
+        {
+            if (on)
+            {
+                var previous = ClaudeHookInstaller.Install(Paths, chain: Settings.AiChainedStatusLine);
+                if (previous is not null) Settings.AiChainedStatusLine = previous;
+            }
+            else
+            {
+                ClaudeHookInstaller.Remove(restoreStatusLine: Settings.AiChainedStatusLine);
+                Settings.AiChainedStatusLine = null;
+            }
+        }
+        catch (Exception ex)
+        {
+            InfoPrompt.Show("Claude hook", "Couldn't update Claude Code's settings.json: " + ex.Message);
+        }
+        Store.SaveSettings(Settings);
+        StateChanged?.Invoke();
+    }
+
+    private AiUsageWindow? _aiUsage;
+
+    public void ShowAiUsage()
+    {
+        if (_aiUsage is null)
+        {
+            _aiUsage = new AiUsageWindow();
+            _aiUsage.Closed += (_, _) => _aiUsage = null;
+            _aiUsage.Show();
+        }
+        else
+        {
+            if (_aiUsage.WindowState == WindowState.Minimized) _aiUsage.WindowState = WindowState.Normal;
+            _aiUsage.Activate();
+        }
     }
 
     /// <summary>Toggle milliseconds on the main window's timer and persist the preference.</summary>

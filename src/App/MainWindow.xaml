@@ -84,11 +84,14 @@
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
                     <TextBlock Grid.Column="0" Text="TODAY" Style="{StaticResource EyebrowText}" VerticalAlignment="Center"/>
                     <Border Grid.Column="1" Height="1" Background="{DynamicResource Border}" Margin="10,0"/>
                     <TextBlock Grid.Column="2" x:Name="TodayTotal" Text="0.0 h" FontSize="12"
                                Foreground="{DynamicResource TextDim}"/>
+                    <TextBlock Grid.Column="3" x:Name="TodayCost" Text="$0.00" FontSize="12" Width="56" Margin="8,0,0,0"
+                               TextAlignment="Right" Foreground="{DynamicResource TextFaint}" Visibility="Collapsed"/>
                 </Grid>
 
                 <!-- IsVirtualizing=False: the Window uses SizeToContent="Height", and a
@@ -150,6 +153,7 @@
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="Auto"/>
                                     <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
                                 <Rectangle Grid.Column="0" Width="11" Height="11" RadiusX="3" RadiusY="3"
                                            Fill="{Binding Swatch}" VerticalAlignment="Center"/>
@@ -183,6 +187,10 @@
                                 </Border>
                                 <TextBlock Grid.Column="3" Text="{Binding HoursText}" FontSize="13"
                                            Foreground="{DynamicResource TextDim}" VerticalAlignment="Center"
+                                           FontFamily="{StaticResource MonoFont}"/>
+                                <TextBlock Grid.Column="4" Text="{Binding CostText}" Visibility="{Binding CostVisibility}"
+                                           Width="56" TextAlignment="Right" FontSize="13" Margin="8,0,0,0"
+                                           Foreground="{DynamicResource TextFaint}" VerticalAlignment="Center"
                                            FontFamily="{StaticResource MonoFont}"/>
                             </Grid>
                         </DataTemplate>

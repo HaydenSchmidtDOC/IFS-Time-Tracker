@@ -139,7 +139,7 @@ public partial class TimesheetWindow : Window
     /// <summary>Whether an interactive, in-progress calendar-view gesture owns the canvas right
     /// now — the shared guard against the once-a-second/resize/state-change auto-rebuilds
     /// tearing it out from under the user (see _drag, _confirmingDelete, _addDragging).</summary>
-    private bool SuspendRerender => _drag is not null || _confirmingDelete || _addDragging;
+    private bool SuspendRerender => _drag is not null || _confirmingDelete || _addDragging || _aiMenuOpen;
 
     public TimesheetWindow()
     {
@@ -171,6 +171,7 @@ public partial class TimesheetWindow : Window
         // live-update wiring rather than relying on a fresh instance to pick up new state.
         A.Tick += OnTick;
         A.StateChanged += OnStateChanged;
+        InitAi();
     }
 
     /// <summary>Everything a view switch entails, shared by the toggle's own SelectionChanged
@@ -907,14 +908,23 @@ public partial class TimesheetWindow : Window
         const double xAxisH = 40;
         const double minColW = 84;
         const double scrollBarH = 18;
-        double viewW = Math.Max(80, width - yAxisW);
+        double viewW = Math.Max(80, width - yAxisW - RightGutter);
         bool needScroll = minColW * projects.Count > viewW;
         double colW = Math.Max(minColW, viewW / projects.Count);
         double plotH = Math.Max(60, height - xAxisH - (needScroll ? scrollBarH : 0));
-        double barW = Math.Max(24, Math.Min(110, colW - 16));
+        var geom = Geom(colW);
+        double barW = geom.HoursW;
         double plotW = colW * projects.Count;
 
+        var monthAi = AiOn
+            ? AiSessionsBetween(_monthStart, _monthStart.AddMonths(1).AddDays(-1)).Where(s => s.ProjectId is not null)
+                .GroupBy(s => s.ProjectId!).ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal)
+            : new Dictionary<string, List<AiSession>>();
+        var costAxis = AiChartMath.NiceAxis(MaxStack(monthAi.Values));
+
         var axis = new Canvas { Width = yAxisW, Height = plotH + xAxisH };
+        var rightAxis = new Canvas { Width = RightGutter, Height = plotH + xAxisH };
+        if (AiOn) DrawCostAxis(rightAxis, costAxis, 0, plotH);
         var canvas = new Canvas { Width = plotW, Height = plotH + xAxisH };
         int lines = (int)Math.Round(axisMax / step);
         for (int i = 0; i <= lines; i++)
@@ -939,7 +949,9 @@ public partial class TimesheetWindow : Window
             var p = projects[i];
             var segs = segsByProject[p.Id];
             double colLeft = colW * i;
-            double cx = colLeft + colW / 2;
+            double cx = colLeft + geom.HoursCx;
+            if (AiOn && monthAi.TryGetValue(p.Id, out var projAi))
+                AddAiStack(canvas, projAi, colLeft + geom.AiLeft, geom.AiW, plotH, costAxis.Max);
 
             // Gaps are carved out of the stack's own height so the column's top lands exactly at
             // its total on the axis no matter how many sessions it's split into (see BuildChart).
@@ -985,9 +997,12 @@ public partial class TimesheetWindow : Window
         var root = new Grid { Width = width, Height = height };
         root.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(yAxisW) });
         root.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        root.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(RightGutter) });
         root.Children.Add(axis);
         Grid.SetColumn(sv, 1);
         root.Children.Add(sv);
+        Grid.SetColumn(rightAxis, 2);
+        root.Children.Add(rightAxis);
         return root;
     }
 
@@ -1246,10 +1261,13 @@ public partial class TimesheetWindow : Window
 
         const double yAxisW = 40;
         const double xAxisH = 32;
-        double plotW = Math.Max(80, width - yAxisW);
+        double plotW = Math.Max(80, width - yAxisW - RightGutter);
         double plotH = Math.Max(60, height - xAxisH);
 
         var canvas = new Canvas { Width = width, Height = height };
+        var weekAi = AiOn ? AiSessionsBetween(_weekStart, _weekStart.AddDays(6)) : new List<AiSession>();
+        var aiByDay = weekAi.GroupBy(AiChartMath.LocalDay).ToDictionary(g => g.Key, g => g.ToList());
+        var costAxis = AiChartMath.NiceAxis(MaxStack(aiByDay.Values));
         var gridBrush = (Brush)FindResource("Border");
         var faintBrush = (Brush)FindResource("TextFaint");
         var dimBrush = (Brush)FindResource("TextDim");
@@ -1263,7 +1281,7 @@ public partial class TimesheetWindow : Window
             double y = plotH - (hoursAt / axisMax) * plotH;
             canvas.Children.Add(new Line
             {
-                X1 = yAxisW, X2 = width, Y1 = y, Y2 = y,
+                X1 = yAxisW, X2 = yAxisW + plotW, Y1 = y, Y2 = y,
                 Stroke = gridBrush, StrokeThickness = 1, SnapsToDevicePixels = true,
             });
             var label = new TextBlock
@@ -1287,7 +1305,7 @@ public partial class TimesheetWindow : Window
             double y8 = plotH - (AxisFloorHours / axisMax) * plotH;
             canvas.Children.Add(new Line
             {
-                X1 = yAxisW, X2 = width, Y1 = y8, Y2 = y8,
+                X1 = yAxisW, X2 = yAxisW + plotW, Y1 = y8, Y2 = y8,
                 Stroke = accentBrush, StrokeThickness = 1, StrokeDashArray = new DoubleCollection { 3, 3 },
                 Opacity = 0.55, SnapsToDevicePixels = true,
             });
@@ -1295,13 +1313,17 @@ public partial class TimesheetWindow : Window
 
         var days = byDay.Keys.OrderBy(d => d).ToList();
         double dayW = plotW / 7.0;
-        double barW = Math.Max(20, dayW - 10); // fill most of the day column, Teams-style
+        var geom = Geom(dayW);
+        double barW = geom.HoursW;
+        if (AiOn) DrawCostAxis(canvas, costAxis, yAxisW + plotW, plotH);
 
         for (int i = 0; i < days.Count; i++)
         {
             var day = days[i];
             double colLeft = yAxisW + dayW * i;
-            double cx = colLeft + dayW / 2;
+            double cx = colLeft + geom.HoursCx;
+            if (AiOn && aiByDay.TryGetValue(day, out var daySessions))
+                AddAiStack(canvas, daySessions, colLeft + geom.AiLeft, geom.AiW, plotH, costAxis.Max);
 
             if (day == today)
             {
@@ -1459,7 +1481,7 @@ public partial class TimesheetWindow : Window
 
         const double yAxisW = 40;
         const double xAxisH = 32; // matches BuildChart's day-label strip height
-        double plotW = Math.Max(80, width - yAxisW);
+        double plotW = Math.Max(80, width - yAxisW - RightGutter);
         double gridHeight = 24 * CalendarPxPerHour;
 
         // Unscheduled ("by amount") entries render as small chips in the day header rather than
@@ -1533,7 +1555,10 @@ public partial class TimesheetWindow : Window
         var monoFont = (FontFamily)FindResource("MonoFont");
 
         double dayW = plotW / 7.0;
-        double barW = Math.Max(20, dayW - 10); // same column math as BuildChart, for alignment
+        var geom = Geom(dayW); // same column math as BuildChart, for alignment
+        double barW = geom.HoursW;
+        var aiByDay = (AiOn ? AiSessionsBetween(byDay.Keys.Min(), byDay.Keys.Max()) : new List<AiSession>())
+            .GroupBy(AiChartMath.LocalDay).ToDictionary(g => g.Key, g => g.ToList());
 
         // Hour gridlines + labels, one per hour — there's room for all 24 (unlike the bar view's
         // 4-5 fractional steps), which also makes each one land on a whole, readable hour.
@@ -1644,7 +1669,7 @@ public partial class TimesheetWindow : Window
         {
             var day = days[i];
             double colLeft = yAxisW + dayW * i;
-            double cx = colLeft + dayW / 2;
+            double cx = colLeft + geom.HoursCx;
 
             if (day == today)
             {
@@ -1852,6 +1877,9 @@ public partial class TimesheetWindow : Window
                 }
                 blockRects.Add(blockRect);
             }
+
+            if (AiOn && aiByDay.TryGetValue(day, out var aiDay))
+                AddAiCalendarLane(canvas, aiDay, day, colLeft + geom.AiLeft, geom.AiW, blockRects);
 
             // Second pass: wire up move/resize now that every block for the day has a Border,
             // so a resize's neighbour-push can look up an already-built element to mutate. Sorted
@@ -2257,7 +2285,7 @@ public partial class TimesheetWindow : Window
                 double mouseX = e.GetPosition(canvas).X;
                 int dayIndex = Math.Clamp((int)((mouseX - yAxisW) / dayW), 0, days.Count - 1);
                 var targetDay = days[dayIndex];
-                double targetCx = yAxisW + dayW * dayIndex + dayW / 2;
+                double targetCx = yAxisW + dayW * dayIndex + geom.HoursCx;
                 Canvas.SetLeft(d.Element, targetCx - barW / 2);
                 d.CurrentDay = targetDay;
             }
@@ -2398,7 +2426,7 @@ public partial class TimesheetWindow : Window
             addDay = clickedDay;
             addAnchorY = pos.Y;
 
-            double cxForAdd = yAxisW + dayW * dayIndex + dayW / 2;
+            double cxForAdd = yAxisW + dayW * dayIndex + geom.HoursCx;
             addLabel = new TextBlock
             {
                 FontSize = 10.5, FontWeight = FontWeights.SemiBold, Foreground = Brushes.White,

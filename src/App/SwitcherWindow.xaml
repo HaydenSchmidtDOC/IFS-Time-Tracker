@@ -11,8 +11,10 @@
             <DropShadowEffect BlurRadius="10" ShadowDepth="2" Opacity="0.36" Color="#161C2A"/>
         </Border.Effect>
         <StackPanel>
+            <TextBlock x:Name="PickTitle" Text="Assign AI Session" Visibility="Collapsed"
+                       FontSize="18" FontWeight="SemiBold" Foreground="{DynamicResource Text}" Margin="15,14,15,0"/>
             <Grid Margin="15,11">
-                <TextBlock Text="CHOOSE PROJECT" Style="{StaticResource EyebrowText}"/>
+                <TextBlock x:Name="TitleText" Text="CHOOSE PROJECT" Style="{StaticResource EyebrowText}"/>
                 <TextBlock x:Name="HintText" Text="↑ ↓ · Enter · dbl-click" HorizontalAlignment="Right"
                            FontSize="10.5" FontWeight="SemiBold" Foreground="{DynamicResource TextFaint}"/>
             </Grid>

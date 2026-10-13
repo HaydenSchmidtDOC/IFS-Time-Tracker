@@ -104,10 +104,55 @@ public partial class SettingsWindow : Window
 
         _projects = A.Tracker.Projects.Select(Clone).ToList();
 
+        InitAi(s);
         InitAppearance(s);
 
         RebuildProjectRows();
     }
+
+    // ================= AI usage =================
+
+    private void InitAi(Settings s)
+    {
+        var enabled = new ToggleSwitch(s.AiTrackingEnabled);
+        enabled.Toggled += on => A.SetAiTrackingEnabled(on);
+        AiEnabledToggleHost.Content = enabled.Root;
+
+        foreach (var cls in Enum.GetNames<EndpointClass>())
+        {
+            var cb = new CheckBox
+            {
+                Content = cls, IsChecked = s.AiEndpointsToTrack.Contains(cls, StringComparer.OrdinalIgnoreCase),
+                Margin = new Thickness(0, 2, 0, 2), Foreground = (Brush)FindResource("Text"),
+            };
+            void Save()
+            {
+                var list = AiEndpointsPanel.Children.OfType<CheckBox>()
+                    .Where(c => c.IsChecked == true).Select(c => (string)c.Content).ToList();
+                A.Settings.AiEndpointsToTrack = list;
+                A.Store.SaveSettings(A.Settings);
+            }
+            cb.Checked += (_, _) => Save();
+            cb.Unchecked += (_, _) => Save();
+            AiEndpointsPanel.Children.Add(cb);
+        }
+
+        AiOverridesBox.Text = string.Join(Environment.NewLine, s.AiEndpointOverrides.Select(kv => $"{kv.Key}={kv.Value}"));
+        AiOverridesBox.LostFocus += (_, _) =>
+        {
+            var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var line in AiOverridesBox.Text.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var parts = line.Trim().Split('=', 2);
+                if (parts.Length == 2 && parts[0].Trim().Length > 0 && Enum.TryParse<EndpointClass>(parts[1].Trim(), true, out var c))
+                    map[parts[0].Trim()] = c.ToString();
+            }
+            A.Settings.AiEndpointOverrides = map;
+            A.Store.SaveSettings(A.Settings);
+        };
+    }
+
+    private void OpenAiUsage_Click(object sender, RoutedEventArgs e) => A.ShowAiUsage();
 
     // ================= Appearance =================
     //

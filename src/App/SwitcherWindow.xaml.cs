@@ -17,9 +17,12 @@ public partial class SwitcherWindow : Window
 
     private static App A => App.Current;
 
-    public SwitcherWindow()
+    private readonly AiSession? _pickFor;
+
+    public SwitcherWindow(AiSession? pickFor = null)
     {
         InitializeComponent();
+        _pickFor = pickFor;
         foreach (var p in A.Tracker.Projects.Where(p => p.Enabled)) _rows.Add(new SwitchRow(p));
         List.ItemsSource = _rows;
 
@@ -28,7 +31,19 @@ public partial class SwitcherWindow : Window
         _hi = Math.Max(0, _rows.ToList().FindIndex(r => r.Id == liveId));
         UpdateHighlight();
 
-        Loaded += (_, _) => Activate();
+        if (_pickFor is not null)
+        {
+            // Must not steal focus from the terminal the session started in, so it stays until
+            // answered instead of dismissing on deactivation.
+            ShowActivated = false;
+            PickTitle.Visibility = Visibility.Visible;
+            TitleText.Text = _pickFor.Provider.ToUpperInvariant();
+            HintText.Text = "Click · Enter · Esc = unassigned";
+        }
+        else
+        {
+            Loaded += (_, _) => Activate();
+        }
     }
 
     private void Move(int delta)
@@ -52,10 +67,11 @@ public partial class SwitcherWindow : Window
             {
                 // Confirming the already-live row stops tracking instead of a no-op "switch to
                 // itself" — flip its badge to spell that out only while it's the highlighted one.
-                row.BadgeText = on ? "■ STOP" : "LIVE";
-                if (on) liveIsHighlighted = true;
+                row.BadgeText = on && _pickFor is null ? "■ STOP" : "LIVE";
+                if (on && _pickFor is null) liveIsHighlighted = true;
             }
         }
+        if (_pickFor is not null) return;
         HintText.Text = liveIsHighlighted ? "Enter to stop" : "↑ ↓ · Enter · dbl-click";
         HintText.Foreground = liveIsHighlighted
             ? (Brush)FindResource("Live")
@@ -70,6 +86,14 @@ public partial class SwitcherWindow : Window
 
     private void Commit()
     {
+        if (_pickFor is not null)
+        {
+            var picked = _rows.Count == 0 ? null : _rows[_hi].Project;
+            _closing = true;
+            Close();
+            A.AiSessions.Assign(_pickFor.Provider, _pickFor.SessionId, picked);
+            return;
+        }
         if (_rows.Count == 0) { Close(); return; }
         var chosen = _rows[_hi].Project;
         bool isLive = A.Tracker.IsRunning && chosen.Id == A.Tracker.Active?.Id;
@@ -92,7 +116,11 @@ public partial class SwitcherWindow : Window
             case Key.Up:    Move(-1); e.Handled = true; break;
             case Key.Down:  Move(1);  e.Handled = true; break;
             case Key.Enter: Commit(); e.Handled = true; break;
-            case Key.Escape: _closing = true; Close(); e.Handled = true; break;
+            case Key.Escape:
+                _closing = true;
+                Close();
+                if (_pickFor is not null) A.AiSessions.Assign(_pickFor.Provider, _pickFor.SessionId, null);
+                e.Handled = true; break;
         }
         base.OnKeyDown(e);
     }
@@ -104,12 +132,12 @@ public partial class SwitcherWindow : Window
         if ((sender as FrameworkElement)?.DataContext is not SwitchRow row) return;
         _hi = _rows.IndexOf(row);
         UpdateHighlight();
-        if (e.ClickCount == 2) Commit(); // double-click confirms immediately
+        if (e.ClickCount == 2 || _pickFor is not null) Commit(); // double-click confirms; pick mode takes a single click
     }
 
     private void Window_Deactivated(object sender, EventArgs e)
     {
-        if (!_closing) Close(); // dismiss like a spotlight when focus is lost
+        if (!_closing && _pickFor is null) Close(); // dismiss like a spotlight when focus is lost
     }
 }
 

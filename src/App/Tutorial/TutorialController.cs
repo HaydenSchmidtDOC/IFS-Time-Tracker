@@ -275,6 +275,12 @@ internal sealed class TutorialController
         },
         new TutorialStep
         {
+            Host = TutorialHost.TimesheetWindow,
+            Title = "AI coding sessions",
+            Body = "Claude Code sessions are tracked automatically. Each one appears in the narrow lane on the right of every day or project bar, coloured by project (grey if unassigned), with its dollar cost on the right-hand axis. Hover for details, or click one to move it to another project. A new session pops up a small picker so you can assign it. Turn this off in Settings → AI usage.",
+        },
+        new TutorialStep
+        {
             Host = TutorialHost.MainWindow,
             Title = "You're all set",
             Body = "That's the whole tour. Add your first project below to get started — you can replay this any time from Settings.",

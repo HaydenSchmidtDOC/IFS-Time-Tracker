@@ -40,14 +40,12 @@ public static class MinTrackSizeFix
     {
         var hwndSource = (HwndSource)PresentationSource.FromVisual(window)!;
         double dpiScale = hwndSource.CompositionTarget.TransformToDevice.M11;
-        int minWidthPx = (int)Math.Round(window.Width * dpiScale);
-
         hwndSource.AddHook((IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled) =>
         {
             if (msg == WM_GETMINMAXINFO)
             {
                 var mmi = Marshal.PtrToStructure<MINMAXINFO>(lParam);
-                mmi.ptMinTrackSize.X = minWidthPx;
+                mmi.ptMinTrackSize.X = (int)Math.Round(window.Width * dpiScale);
                 Marshal.StructureToPtr(mmi, lParam, true);
             }
             return IntPtr.Zero;

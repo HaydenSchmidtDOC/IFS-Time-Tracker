@@ -153,6 +153,13 @@ Proposals, pick any:
 - Reassign and total calculations per period.
 - Manual: picker does not steal focus mid-typing, works with the window minimised, works with two sessions starting at once, hotkeys resume after close.
 
+### 2.6 As built (v0.6.4)
+- Picker: `SwitcherWindow(AiSession)`, `ShowActivated=false`, no close on deactivate, single click or Enter assigns, Esc leaves Unassigned. Sessions queue in `App.ShowNextAiPick`. Hotkeys are not paused (it takes no focus); Enter/Esc need a click first. Optional timeout not built.
+- Reporting: cost column in the main window (today, grows the window only when enabled); timesheet Totals/Calendar/Project reserve 15% of each bar for sessions with a right-hand dollar axis (`AiChartMath.NiceAxis`). Calendar packs overlaps into lanes (`AssignLanes`). Sessions attribute to the local day of their start (D7: by start). Unassigned sessions show in Totals/Calendar but not the Project tab.
+- Reassign: click a session segment, `AiAssignDialog` (styled like Add time).
+- Settings: enable switch (installs/removes the hook and statusline, and re-installs at startup when on), endpoints to track, override map. The AI usage session list window exists but its Settings button is hidden. Hook buttons, pricing path, picker timeout and export columns not built.
+- Enabled by default.
+
 ---
 
 ## Stage 3 - VS Code Copilot (and Copilot CLI) addition

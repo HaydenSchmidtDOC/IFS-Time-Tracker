@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.6.4] Beta — 2026-10-14
+
+### New
+
+- **AI usage tracking (Claude Code).** On by default. When you start a Claude Code session a small picker
+  asks which project it belongs to (Enter or click to assign, Esc leaves it unassigned). The main window
+  gains a cost column next to today's hours. In the timesheet (Totals, Calendar and Project views) each
+  bar reserves a narrow lane on the right for AI sessions, with a dollar axis on the right; hover a
+  session for details or click it to change its project. Overlapping sessions in Calendar sit side by
+  side. Turn it off, choose which endpoints to track, or override endpoint classes in
+  Settings → AI usage. Enabling it adds a SessionStart hook and statusline to Claude Code's
+  `settings.json`; disabling removes them.
+- The timesheet window opens 10% wider, and the Project view now scales its columns with the window like
+  Totals and Calendar.
+
 ## [0.6.3] Beta — 2026-10-13
 
 ### Fixed

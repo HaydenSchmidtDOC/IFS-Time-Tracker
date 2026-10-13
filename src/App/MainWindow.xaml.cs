@@ -25,6 +25,9 @@ public partial class MainWindow : Window
     // burn cycles for the common case where nobody wants sub-second display.
     private DispatcherTimer? _msTimer;
 
+    private const double BaseWidth = 372;
+    private const double CostColumnExtra = 64;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -43,7 +46,15 @@ public partial class MainWindow : Window
 
         A.Tick += OnTick;
         A.StateChanged += OnStateChanged;
+        A.AiSessions.Changed += () => Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, () =>
+        {
+            if (_aiUpdatePending) return;
+            _aiUpdatePending = true;
+            Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.ContextIdle, () => { _aiUpdatePending = false; UpdateLive(); });
+        });
     }
+
+    private bool _aiUpdatePending;
 
     private void OnTick() => UpdateLive();
     private void OnStateChanged() { Rebuild(); UpdateLive(); SyncMsTimer(); SyncCloseButtonVisibility(); }
@@ -299,6 +310,28 @@ public partial class MainWindow : Window
         }
         TodayTotal.Text = $"{Rounding.ToTenthHours(grand):0.0} h";
 
+        bool aiOn = A.Settings.AiTrackingEnabled;
+        var costVis = aiOn ? Visibility.Visible : Visibility.Collapsed;
+        double aiTotal = 0;
+        var costByProject = new Dictionary<string, double>(StringComparer.Ordinal);
+        if (aiOn)
+        {
+            var today = DateTime.Today;
+            foreach (var s in A.AiSessions.Snapshot().Where(s => AiChartMath.LocalDay(s) == today))
+            {
+                aiTotal += s.CostUsd;
+                if (s.ProjectId is not null) costByProject[s.ProjectId] = costByProject.GetValueOrDefault(s.ProjectId) + s.CostUsd;
+            }
+        }
+        foreach (var row in _rows)
+        {
+            row.CostVisibility = costVis;
+            row.CostText = AiChartMath.FormatCost(costByProject.GetValueOrDefault(row.Id));
+        }
+        TodayCost.Visibility = costVis;
+        TodayCost.Text = AiChartMath.FormatCost(aiTotal);
+        Width = aiOn ? BaseWidth + CostColumnExtra : BaseWidth;
+
         UpdatePrimary();
     }
 
@@ -439,6 +472,12 @@ public sealed class ProjectRow : INotifyPropertyChanged
 
     private string _hoursText = "0.0 h";
     public string HoursText { get => _hoursText; set { _hoursText = value; Notify(nameof(HoursText)); } }
+
+    private string _costText = "$0.00";
+    public string CostText { get => _costText; set { _costText = value; Notify(nameof(CostText)); } }
+
+    private Visibility _costVisibility = Visibility.Collapsed;
+    public Visibility CostVisibility { get => _costVisibility; set { _costVisibility = value; Notify(nameof(CostVisibility)); } }
 
     private Visibility _liveVisibility = Visibility.Collapsed;
     public Visibility LiveVisibility { get => _liveVisibility; set { _liveVisibility = value; Notify(nameof(LiveVisibility)); } }

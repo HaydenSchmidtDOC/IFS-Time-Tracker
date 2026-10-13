@@ -51,6 +51,7 @@ public static class EndpointClassifier
 /// <summary>One AI coding session, assigned (or not) to a project. Costs are derived data.</summary>
 public sealed class AiSession
 {
+    public AiSession ShallowCopy() => (AiSession)MemberwiseClone();
     public string Provider { get; set; } = "claude";
     public string SessionId { get; set; } = "";
     public string? ProjectId { get; set; }

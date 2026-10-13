@@ -30,9 +30,12 @@ public sealed class AiSessionService
         _sessions = Load();
     }
 
+    private IReadOnlyList<AiSession>? _snapshot;
+
+    /// <summary>Cached copy of all sessions; rebuilt only after a mutation (every mutation calls Save).</summary>
     public IReadOnlyList<AiSession> Snapshot()
     {
-        lock (_gate) return _sessions.Select(Clone).ToList();
+        lock (_gate) return _snapshot ??= _sessions.Select(Clone).ToList();
     }
 
     public void Handle(AiPipeMessage msg)
@@ -155,7 +158,7 @@ public sealed class AiSessionService
     private AiSession? Find(string provider, string id)
         => _sessions.FirstOrDefault(x => x.SessionId == id && x.Provider == provider);
 
-    private static AiSession Clone(AiSession s) => JsonSerializer.Deserialize<AiSession>(JsonSerializer.Serialize(s))!;
+    private static AiSession Clone(AiSession s) => s.ShallowCopy();
 
     private List<AiSession> Load()
     {
@@ -170,6 +173,7 @@ public sealed class AiSessionService
 
     private void Save()
     {
+        _snapshot = null;
         var tmp = _paths.AiSessionsFile + ".tmp";
         File.WriteAllText(tmp, JsonSerializer.Serialize(_sessions, Opts));
         if (File.Exists(_paths.AiSessionsFile)) File.Replace(tmp, _paths.AiSessionsFile, null);
