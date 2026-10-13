@@ -186,4 +186,19 @@ public sealed class Settings
     /// skipped.
     /// </summary>
     public string? SkippedUpdateVersion { get; set; }
+
+    /// <summary>Master switch for AI session tracking (hook receiver + cost records).</summary>
+    public bool AiTrackingEnabled { get; set; } = true;
+
+    /// <summary>Endpoint classes whose Claude sessions are recorded: "Anthropic", "Foundry", "Local",
+    /// "Other". Sessions on any other endpoint are ignored entirely.</summary>
+    public List<string> AiEndpointsToTrack { get; set; } = new() { "Anthropic", "Foundry", "Local" };
+
+    /// <summary>"host" or "host:port" -> endpoint class, for declaring what a known proxy fronts
+    /// (e.g. "127.0.0.1:42515" -> "Foundry"). Checked before the built-in rules.</summary>
+    public Dictionary<string, string> AiEndpointOverrides { get; set; } = new();
+
+    /// <summary>An existing statusline command to keep running; the cost reporter passes the
+    /// statusline JSON through to it and prints its output.</summary>
+    public string? AiChainedStatusLine { get; set; }
 }

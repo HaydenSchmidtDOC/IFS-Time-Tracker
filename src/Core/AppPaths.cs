@@ -27,6 +27,9 @@ public sealed class AppPaths
     public string ProjectsFile => Path.Combine(DataFolder, "projects.json");
     public string StateFile     => Path.Combine(DataFolder, "state.json");
     public string SettingsFile  => Path.Combine(DataFolder, "settings.json");
+    public string AiSessionsFile => Path.Combine(DataFolder, "ai_sessions.json");
+    public string PricingFile    => Path.Combine(DataFolder, "pricing.json");
+    public string AiHookScript   => Path.Combine(DataFolder, "ai-hook.ps1");
 
     /// <summary>Monthly rolling log, e.g. <c>log-2026-07.csv</c>.</summary>
     public string LogFileFor(DateTime localDate)

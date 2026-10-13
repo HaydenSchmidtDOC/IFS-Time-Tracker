@@ -37,6 +37,8 @@ public partial class App : Application
     public CsvLog Log { get; private set; } = null!;
     public Settings Settings { get; private set; } = null!;
     public TrackerService Tracker { get; private set; } = null!;
+    public AiSessionService AiSessions { get; private set; } = null!;
+    private AiPipeServer? _aiPipe;
     public IfsExporter Exporter { get; private set; } = null!;
 
     private HotKeyManager _hotkeys = null!;
@@ -81,6 +83,7 @@ public partial class App : Application
         // "TimeTracker.SingleInstance" while it's exiting, so this instance would otherwise be
         // rejected as a duplicate and shut down before doing the swap.
         if (TryHandleUpdateArgs(e.Args)) return;
+        if (TryHandleAiHookArgs(e.Args)) return;
 
         // Last-resort safety net: WPF kills the whole process on any unhandled exception on the
         // UI thread by default, with no dialog and nothing to diagnose from afterwards. For a
@@ -130,6 +133,18 @@ public partial class App : Application
         Log = new CsvLog(Paths);
         Tracker = new TrackerService(Store, Log);
         Exporter = new IfsExporter(Log, Paths);
+
+        AiSessions = new AiSessionService(Paths, () => Settings, () => Tracker.IsRunning ? Tracker.Active : null);
+        _aiPipe = new AiPipeServer(msg =>
+        {
+            try
+            {
+                AiSessions.Handle(msg);
+                if (msg.Kind == "start") AiSessions.RefreshFromTranscript(msg.Provider, msg.SessionId);
+            }
+            catch { /* a bad message must never take the app down */ }
+        });
+        _aiPipe.Start();
 
         Tracker.Changed += () => { UpdateTray(); StateChanged?.Invoke(); };
         Tracker.StartRefused += collision => InfoPrompt.Show("Can't start tracking", CollisionMessage(collision, ended: false));
@@ -646,6 +661,7 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        _aiPipe?.Dispose();
         if (_ownsInstanceMutex) _instanceMutex?.ReleaseMutex();
         _instanceMutex?.Dispose();
         base.OnExit(e);
@@ -754,6 +770,34 @@ public partial class App : Application
         // ConfigureAwait(false) awaits above — it must run on the UI thread or it throws and the
         // app never exits, leaving the updater waiting on it forever.
         await Dispatcher.InvokeAsync(QuitApp).Task.ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// <c>--install-claude-hook</c> / <c>--remove-claude-hook</c>: edit Claude Code's settings.json and exit.
+    /// </summary>
+    private bool TryHandleAiHookArgs(string[] args)
+    {
+        var install = args.Contains("--install-claude-hook", StringComparer.OrdinalIgnoreCase);
+        var remove = args.Contains("--remove-claude-hook", StringComparer.OrdinalIgnoreCase);
+        if (!install && !remove) return false;
+
+        var paths = new AppPaths();
+        var store = new JsonStore(paths);
+        var settings = store.LoadSettings();
+        if (install)
+        {
+            var previous = ClaudeHookInstaller.Install(paths, chain: settings.AiChainedStatusLine);
+            if (previous is not null) settings.AiChainedStatusLine = previous;
+            settings.AiTrackingEnabled = true;
+        }
+        else
+        {
+            ClaudeHookInstaller.Remove(restoreStatusLine: settings.AiChainedStatusLine);
+            settings.AiChainedStatusLine = null;
+        }
+        store.SaveSettings(settings);
+        Shutdown();
+        return true;
     }
 
     /// <summary>
