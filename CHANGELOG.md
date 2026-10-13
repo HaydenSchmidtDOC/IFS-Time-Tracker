@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### New
+
+- **What's new popup.** The first launch after an update shows that version's release notes with an OK button.
+
 ## [0.6.1] Beta — 2026-10-13
 
 ### New

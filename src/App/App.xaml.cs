@@ -178,7 +178,8 @@ public partial class App : Application
         // the next launch. Force main on screen first regardless of StartMinimized — there'd
         // otherwise be nothing for the first arrow to point at, and no visible window for the
         // welcome popup itself to sit in front of.
-        if (!Settings.OnboardingPromptShown)
+        bool firstRun = !Settings.OnboardingPromptShown;
+        if (firstRun)
         {
             ShowMainWindow();
             Settings.OnboardingPromptShown = true;
@@ -186,11 +187,38 @@ public partial class App : Application
             if (WelcomePrompt.Ask()) StartTutorial();
         }
 
+        ShowReleaseNotesIfUpdated(firstRun);
+
         // Update check — fire-and-forget so startup never blocks on the network. Gated by the
         // setting and throttled to at most once a day (see CheckForUpdatesAsync). Runs after the
         // main window is up so any prompt appears in front of a visible app.
         if (Settings.CheckForUpdates)
             _ = CheckForUpdatesAsync(force: false);
+    }
+
+    /// <summary>First launch after an update: shows that version's CHANGELOG section once. A fresh
+    /// install just records the version (the welcome tour is its intro), and a version with no
+    /// changelog section is recorded silently.</summary>
+    private void ShowReleaseNotesIfUpdated(bool firstRun)
+    {
+        var v = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
+        if (v is null) return;
+        string current = $"{v.Major}.{v.Minor}.{v.Build}";
+        if (Settings.LastSeenVersion == current) return;
+
+        Settings.LastSeenVersion = current;
+        Store.SaveSettings(Settings);
+        if (firstRun) return;
+
+        try
+        {
+            using var stream = System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream("CHANGELOG.md");
+            if (stream is null) return;
+            using var reader = new StreamReader(stream);
+            var notes = ReleaseNotes.Extract(reader.ReadToEnd(), current);
+            if (notes is not null) ReleaseNotesPrompt.Show(current, notes);
+        }
+        catch { /* a notes popup must never stop the app starting */ }
     }
 
     /// <summary>Runs the guided tour — the single entry point for both the first-run welcome

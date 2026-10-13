@@ -137,6 +137,11 @@ public sealed class Settings
     /// "Start tutorial" button re-runs the tour on demand regardless of this flag.</summary>
     public bool OnboardingPromptShown { get; set; } = false;
 
+    /// <summary>App version (major.minor.build) the release-notes popup last ran for — empty on
+    /// installs from before this existed. Compared against the running version on startup so the
+    /// notes show once per update.</summary>
+    public string LastSeenVersion { get; set; } = "";
+
     /// <summary>
     /// Which theme the app is skinned with: "Light", "Dark", "System" (follow Windows'
     /// light/dark setting live), or "Custom" (one of the bundled full-palette themes named by

@@ -25,6 +25,11 @@
     <ProjectReference Include="..\Core\TimeTracker.Core.csproj" />
   </ItemGroup>
 
+  <!-- Read at runtime by ReleaseNotes to show the "what's new" popup after an update. -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\CHANGELOG.md" LogicalName="CHANGELOG.md" />
+  </ItemGroup>
+
   <!-- Also exposed as a WPF Resource (separate embedding path from ApplicationIcon above,
        which only bakes the .exe's own native icon) so Window.Icon="Assets/..." can load it
        at runtime for the taskbar/Alt-Tab thumbnail. -->
