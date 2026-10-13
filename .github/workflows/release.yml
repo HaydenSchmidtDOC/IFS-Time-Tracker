@@ -5,8 +5,8 @@ name: Release
 # like v0.6.0 (the version in src/App/TimeTracker.csproj should match the tag).
 #
 # Security: this workflow publishes the exe that every user's app auto-updates to, so it is a
-# supply-chain target. Third-party actions are pinned to commit SHAs (not mutable tags) so a
-# compromised/mutated action tag can't inject code into the release build. Permissions are
+# supply-chain target. No third-party actions are used (the repo only allows actions owned by its owner),
+# so there is nothing external to compromise in the release build. Permissions are
 # scoped to the minimum. Releases are only built from the default branch.
 
 on:
@@ -22,7 +22,19 @@ jobs:
   build:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      # No third-party actions: the repo only allows actions owned by HaydenSchmidtDOC, so
+      # checkout is plain git and the release is made with the runner's preinstalled gh CLI.
+      - name: Checkout
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          $auth = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("x-access-token:$env:GH_TOKEN"))
+          git init .
+          git remote add origin "https://github.com/$env:GITHUB_REPOSITORY"
+          git -c "http.extraheader=AUTHORIZATION: basic $auth" fetch --no-tags origin "+refs/heads/$($env:DEFAULT_BRANCH):refs/remotes/origin/$($env:DEFAULT_BRANCH)" $env:GITHUB_SHA
+          git checkout --detach $env:GITHUB_SHA
 
       # Supply-chain guard: only publish a release if the tag points at the default branch's
       # HEAD. A tag pushed to a fork or a stale/non-default commit must never publish an exe
@@ -38,11 +50,6 @@ jobs:
             exit 1
           }
           Write-Output "Tag $env:GITHUB_REF_NAME points at $default HEAD — OK"
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
-        with:
-          dotnet-version: '8.0.x'
 
       - name: Publish self-contained exe
         run: dotnet publish src/App/TimeTracker.csproj -c Release -p:PublishSelfContained=true -o dist
@@ -74,9 +81,8 @@ jobs:
           Write-Output "sha256=$hash"
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
-        with:
-          files: |
-            dist/IFS-Time-Tracker.exe
-            dist/latest.json
-          generate_release_notes: true
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create $env:GITHUB_REF_NAME dist/IFS-Time-Tracker.exe dist/latest.json --repo $env:GITHUB_REPOSITORY --title $env:GITHUB_REF_NAME --generate-notes --verify-tag
