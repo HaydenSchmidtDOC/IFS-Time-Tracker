@@ -43,7 +43,7 @@ jobs:
         shell: pwsh
         run: |
           $default = "${{ github.event.repository.default_branch }}"
-          $tagSha = git rev-parse "$env:GITHUB_REF_NAME^{commit}"
+          $tagSha = $env:GITHUB_SHA
           $branchSha = git rev-parse "origin/$default"
           if ($tagSha -ne $branchSha) {
             Write-Error "Tag $env:GITHUB_REF_NAME does not point at the default branch HEAD ($default). Refusing to publish a release."
