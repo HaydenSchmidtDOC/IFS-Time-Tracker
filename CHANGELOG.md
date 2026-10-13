@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.3] Beta — 2026-10-13
+
+### Fixed
+
+- **In-app update now works.** Clicking Update downloaded the new version but the app never quit, so the
+  updater waited forever and the update failed. Versions 0.6.0 - 0.6.2 are affected and need one manual
+  update (replace the exe with the one from the release page); updates are automatic from here on.
+
 ## [0.6.2] Beta — 2026-10-13
 
 ### New
