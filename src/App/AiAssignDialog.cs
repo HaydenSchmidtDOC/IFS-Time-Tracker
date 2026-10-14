@@ -13,6 +13,7 @@ namespace TimeTracker.App;
 public sealed class AiAssignDialog : Window
 {
     private bool _closing;
+    private Border? _pressed;
 
     private AiAssignDialog(AiSession s)
     {
@@ -97,8 +98,13 @@ public sealed class AiAssignDialog : Window
             VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis,
         });
         row.Child = content;
+        // Commit only on a press that started on this row: the dialog opens from a mouse-down on
+        // the timesheet, and that same click's mouse-up would otherwise land on whichever row is
+        // under the cursor and assign + close it instantly.
+        row.MouseLeftButtonDown += (_, e) => { _pressed = row; e.Handled = true; };
         row.MouseLeftButtonUp += (_, _) =>
         {
+            if (_pressed != row) return;
             App.Current.AiSessions.Assign(s.Provider, s.SessionId, p);
             Close();
         };

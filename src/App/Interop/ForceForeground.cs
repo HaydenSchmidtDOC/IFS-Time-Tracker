@@ -24,6 +24,8 @@ public static class ForceForeground
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] private static extern bool BringWindowToTop(IntPtr hWnd);
 
+    public static IntPtr Current() => GetForegroundWindow();
+
     public static void Apply(IntPtr hwnd)
     {
         IntPtr foreground = GetForegroundWindow();

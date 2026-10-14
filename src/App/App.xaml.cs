@@ -169,6 +169,8 @@ public partial class App : Application
         _main = new MainWindow();
         _pill = new PillWindow();
         if (Settings.PillVisible) _pill.Show();
+        // Popup blur overlay created up front so the first popup doesn't pay for it.
+        Dispatcher.BeginInvoke(BackdropBlur.Prewarm, DispatcherPriority.ApplicationIdle);
 
         _hotkeys = new HotKeyManager();
         _hotkeys.Register(ModifierKeys.Control, Key.Up, OpenSwitcher);
@@ -559,9 +561,15 @@ public partial class App : Application
     {
         if (_aiPicker is not null || _aiPickQueue.Count == 0) return;
         var s = _aiPickQueue.Dequeue();
-        _aiPicker = new SwitcherWindow(s);
-        _aiPicker.Closed += (_, _) => { _aiPicker = null; ShowNextAiPick(); };
-        _aiPicker.Show(); // ShowActivated=false: the terminal keeps focus
+        // Blur the terminal the session started in (the foreground window right now — the
+        // previous picker, if any, has already handed focus back to it). Shown once the picker has
+        // drawn, so the picker appears first. Clicking the blur is the same as Esc: unassigned.
+        var area = BackdropBlur.ContentBounds(ForceForeground.Current());
+        var backdrop = area is { } a ? BackdropBlur.Capture(a) : null;
+        var picker = _aiPicker = new SwitcherWindow(s, area);
+        picker.ContentRendered += (_, _) => backdrop?.Show(picker, () => picker.Dismiss());
+        picker.Closed += (_, _) => { backdrop?.Close(); _aiPicker = null; ShowNextAiPick(); };
+        _aiPicker.Show(); // takes focus, returns it to the terminal on close — see SwitcherWindow
     }
 
     public void OpenSwitcher()

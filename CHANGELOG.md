@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.7.0] Beta — 2026-10-14
+
+### Changed
+
+- **AI session picker.** It now takes keyboard focus straight away (arrows, Enter and Esc work without
+  clicking) and hands focus back to the terminal when answered. It opens over the terminal that started
+  the session, and the terminal's contents are blurred and dimmed behind it; clicking the blur leaves the
+  session unassigned, like Esc.
+
+### Fixed
+
+- Clicking an AI session in the timesheet sometimes assigned it to whichever project was under the
+  cursor and closed the chooser straight away.
+
 ## [0.6.4] Beta — 2026-10-14
 
 ### New

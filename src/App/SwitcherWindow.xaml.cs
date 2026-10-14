@@ -1,8 +1,11 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Interop;
+using TimeTracker.App.Interop;
 using System.Windows.Media;
 using TimeTracker.App.UI;
 using TimeTracker.Core;
@@ -18,11 +21,34 @@ public partial class SwitcherWindow : Window
     private static App A => App.Current;
 
     private readonly AiSession? _pickFor;
+    private readonly IntPtr _returnFocusTo;
 
-    public SwitcherWindow(AiSession? pickFor = null)
+    /// <param name="centerOn">Physical screen pixels (the terminal) to centre over horizontally,
+    /// instead of the screen centre.</param>
+    public SwitcherWindow(AiSession? pickFor = null, System.Drawing.Rectangle? centerOn = null)
     {
         InitializeComponent();
         _pickFor = pickFor;
+        if (centerOn is { } area)
+        {
+            // Positioned in physical pixels via SetWindowPos (WPF's Left/Top are DIPs of whichever
+            // monitor it starts on, which is wrong across mixed DPI). Re-run on every size change:
+            // SizeToContent settles the height, and moving onto a different-DPI monitor rescales.
+            WindowStartupLocation = WindowStartupLocation.Manual;
+            SizeChanged += (_, e) =>
+            {
+                var hwnd = new WindowInteropHelper(this).Handle;
+                if (hwnd == IntPtr.Zero) return;
+                // From the new size, not GetWindowRect: SizeChanged fires before WPF has resized
+                // the HWND, so its rect is still the old (pre-SizeToContent) size.
+                var dpi = VisualTreeHelper.GetDpi(this);
+                int w = (int)Math.Round(e.NewSize.Width * dpi.DpiScaleX), h = (int)Math.Round(e.NewSize.Height * dpi.DpiScaleY);
+                // Horizontally over the terminal, vertically centred on the terminal's monitor.
+                var screen = System.Windows.Forms.Screen.FromRectangle(area).WorkingArea;
+                SetWindowPos(hwnd, IntPtr.Zero, area.Left + (area.Width - w) / 2, screen.Top + (screen.Height - h) / 2,
+                    0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+            };
+        }
         foreach (var p in A.Tracker.Projects.Where(p => p.Enabled)) _rows.Add(new SwitchRow(p));
         List.ItemsSource = _rows;
 
@@ -33,9 +59,18 @@ public partial class SwitcherWindow : Window
 
         if (_pickFor is not null)
         {
-            // Must not steal focus from the terminal the session started in, so it stays until
-            // answered instead of dismissing on deactivation.
-            ShowActivated = false;
+            // Takes focus so arrows/Enter work immediately (ForceForeground — a plain Activate()
+            // from a background app is silently refused while the terminal owns the foreground),
+            // then hands focus back to whatever had it once answered. Still stays open until
+            // answered rather than dismissing on deactivation.
+            _returnFocusTo = ForceForeground.Current();
+            Loaded += (_, _) =>
+            {
+                ForceForeground.Apply(new WindowInteropHelper(this).Handle);
+                Activate();
+                Focus();
+            };
+            Closed += (_, _) => { if (_returnFocusTo != IntPtr.Zero) ForceForeground.Apply(_returnFocusTo); };
             PickTitle.Visibility = Visibility.Visible;
             TitleText.Text = _pickFor.Provider.ToUpperInvariant();
             HintText.Text = "Click · Enter · Esc = unassigned";
@@ -116,14 +151,22 @@ public partial class SwitcherWindow : Window
             case Key.Up:    Move(-1); e.Handled = true; break;
             case Key.Down:  Move(1);  e.Handled = true; break;
             case Key.Enter: Commit(); e.Handled = true; break;
-            case Key.Escape:
-                _closing = true;
-                Close();
-                if (_pickFor is not null) A.AiSessions.Assign(_pickFor.Provider, _pickFor.SessionId, null);
-                e.Handled = true; break;
+            case Key.Escape: Dismiss(); e.Handled = true; break;
         }
         base.OnKeyDown(e);
     }
+
+    /// <summary>Close without choosing — in pick mode that leaves the session unassigned.</summary>
+    public void Dismiss()
+    {
+        if (_closing) return;
+        _closing = true;
+        Close();
+        if (_pickFor is not null) A.AiSessions.Assign(_pickFor.Provider, _pickFor.SessionId, null);
+    }
+
+    private const uint SWP_NOSIZE = 0x0001, SWP_NOZORDER = 0x0004, SWP_NOACTIVATE = 0x0010;
+    [DllImport("user32.dll")] private static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
 
     private void Window_MouseWheel(object sender, MouseWheelEventArgs e) => Move(e.Delta > 0 ? -1 : 1);
 

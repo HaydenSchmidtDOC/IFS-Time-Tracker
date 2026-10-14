@@ -86,15 +86,22 @@ public partial class TimesheetWindow
             Width = w, Height = h, Background = AiFill(s), CornerRadius = new CornerRadius(3),
             ToolTip = AiTooltip(s), Cursor = Cursors.Hand,
         };
-        b.MouseLeftButtonDown += (_, e) => { e.Handled = true; ShowAiReassignMenu(s, b); };
+        b.MouseLeftButtonDown += (_, e) => { e.Handled = true; ShowAiReassignMenu(s); };
         return b;
     }
 
-    private void ShowAiReassignMenu(AiSession s, FrameworkElement target)
+    private void ShowAiReassignMenu(AiSession s)
     {
+        if (_aiMenuOpen) return;
+        // Flag set now (suspends live-session repaints), dialog opened once this click's input
+        // has finished processing — opening a modal from inside the mouse-down let the window's
+        // own click-activation land after it, deactivating (and so closing) the dialog at once.
         _aiMenuOpen = true;
-        try { AiAssignDialog.Show(s, this); }
-        finally { _aiMenuOpen = false; }
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Input, () =>
+        {
+            try { AiAssignDialog.Show(s, this); }
+            finally { _aiMenuOpen = false; }
+        });
     }
 
     private void DrawCostAxis(Canvas canvas, CostAxis axis, double left, double plotH)
