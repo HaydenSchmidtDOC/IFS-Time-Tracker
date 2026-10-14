@@ -143,13 +143,18 @@ public partial class TimesheetWindow : Window
     {
         double cycleMs = half.TotalMilliseconds * 2;
         double phaseMs = (DateTime.UtcNow - AnimationEpoch).TotalMilliseconds % cycleMs;
-        return new DoubleAnimation(from, to, half)
+        var anim = new DoubleAnimation(from, to, half)
         {
             AutoReverse = true,
             RepeatBehavior = RepeatBehavior.Forever,
             BeginTime = TimeSpan.FromMilliseconds(-phaseMs),
             EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut },
         };
+        // A slow opacity breathe reads the same at 12fps as at 60, and WPF renders every window on
+        // this thread at the fastest rate any running clock asks for — uncapped, the pulse kept
+        // the whole app (pill included) redrawing at ~60fps while Timesheets was open.
+        Timeline.SetDesiredFrameRate(anim, 12);
+        return anim;
     }
 
     /// <summary>True while a calendar-view delete confirmation ("Delete this block?") is showing.
@@ -2567,14 +2572,37 @@ public partial class TimesheetWindow : Window
 
         newVisual.Opacity = 0;
         ChartHost.Children.Add(newVisual);
-        newVisual.BeginAnimation(OpacityProperty,
-            new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(260)) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
+        var fadeIn = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(260)) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } };
+        CacheWhileAnimating(newVisual, fadeIn);
+        newVisual.BeginAnimation(OpacityProperty, fadeIn);
 
         if (old is null) return;
+        old.CacheMode = NewTransitionCache();
         var fadeOut = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(200))
         { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseIn } };
         fadeOut.Completed += (_, _) => ChartHost.Children.Remove(old);
         old.BeginAnimation(OpacityProperty, fadeOut);
+    }
+
+    // A week/view transition moves or fades the whole chart every frame. Without a cache WPF
+    // re-renders the subtree each frame, which is cheap for Totals but not for Calendar (clipped
+    // rounded blocks, drop-shadow effects, a ScrollViewer over a 24h canvas — each an offscreen
+    // pass under the animated opacity). Rendering it once to a bitmap and moving that keeps the
+    // slide smooth; the cache comes off when it lands so text goes back to crisp.
+    private BitmapCache NewTransitionCache() => new() { SnapsToDevicePixels = true };
+
+    private void CacheWhileAnimating(FrameworkElement visual, AnimationTimeline anim)
+    {
+        visual.CacheMode = NewTransitionCache();
+        // The live block's pulse would dirty the cache every frame, defeating it — hold it still
+        // for the ~quarter second the transition takes.
+        foreach (var (_, _, clock) in _breathing) clock.Controller?.Pause();
+        anim.Completed += (_, _) =>
+        {
+            if (!ReferenceEquals(_currentChart, visual)) return;
+            visual.CacheMode = null;
+            foreach (var (_, _, clock) in _breathing) clock.Controller?.Resume();
+        };
     }
 
     /// <summary>Add the new week's chart, sliding it in while the previous one slides out and fades.</summary>
@@ -2591,8 +2619,9 @@ public partial class TimesheetWindow : Window
 
         if (direction != 0)
         {
-            tt.BeginAnimation(TranslateTransform.XProperty,
-                new DoubleAnimation(tt.X, 0, TimeSpan.FromMilliseconds(280)) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
+            var slideIn = new DoubleAnimation(tt.X, 0, TimeSpan.FromMilliseconds(280)) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } };
+            CacheWhileAnimating(newVisual, slideIn);
+            tt.BeginAnimation(TranslateTransform.XProperty, slideIn);
             newVisual.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(240)));
         }
 
@@ -2606,6 +2635,7 @@ public partial class TimesheetWindow : Window
 
         var oldTt = new TranslateTransform(0, 0);
         old.RenderTransform = oldTt;
+        old.CacheMode = NewTransitionCache();
         var slideOut = new DoubleAnimation(0, -direction * dist, TimeSpan.FromMilliseconds(280))
         { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseIn } };
         slideOut.Completed += (_, _) => ChartHost.Children.Remove(old);

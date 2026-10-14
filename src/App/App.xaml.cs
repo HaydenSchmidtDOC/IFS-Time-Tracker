@@ -180,7 +180,10 @@ public partial class App : Application
         _idle.IdleEnded += OnIdleEnded;
         _idle.Start();
 
-        _uiTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        // Normal priority, not DispatcherTimer's default Background: Background sits below Render
+        // and Input, so any stretch of continuous rendering (an animation in Timesheets, a slide)
+        // pushed the pill's once-a-second update back by seconds at a time.
+        _uiTimer = new DispatcherTimer(DispatcherPriority.Normal) { Interval = TimeSpan.FromSeconds(1) };
         // Checked first, before Tick fires — if it stops the session, everything Tick refreshes
         // (pill, timesheet, tray) should already see the post-stop state, not lag a tick behind.
         _uiTimer.Tick += (_, _) => { CheckForLiveCollisionWithPrompt(); Tick?.Invoke(); UpdateTrayTooltip(); };
