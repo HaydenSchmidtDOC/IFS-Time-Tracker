@@ -49,7 +49,7 @@ public partial class TimesheetWindow
             Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.ContextIdle, () =>
             {
                 _aiRenderPending = false;
-                if (!IsVisible || SuspendRerender) return;
+                if (Offscreen || SuspendRerender) return;
                 RenderCurrentWeek(0);
             });
         });

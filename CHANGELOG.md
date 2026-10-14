@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.7.1] Beta — 2026-10-14
+
+### Fixed
+
+- The floating pill and other windows could slow to updating only every 2–3 seconds after the
+  timesheet had been opened and closed. The timesheet's "live" pulse kept animating while the window
+  was hidden, which kept the app redrawing non-stop; it now stops whenever the timesheet is closed or
+  minimised.
+
 ## [0.7.0] Beta — 2026-10-14
 
 ### Changed

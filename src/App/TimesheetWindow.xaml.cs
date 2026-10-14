@@ -110,6 +110,35 @@ public partial class TimesheetWindow : Window
     /// the past that a Forever/AutoReverse timeline picks up exactly where the LAST instance's
     /// would be right now, so consecutive instances read as one uninterrupted breathing loop.
     /// </summary>
+    private void Breathe(IAnimatable target, DependencyProperty prop, double from, double to)
+    {
+        var clock = BreathingAnimation(from, to, TimeSpan.FromMilliseconds(900)).CreateClock();
+        target.ApplyAnimationClock(prop, clock);
+        _breathing.Add((target, prop, clock));
+    }
+
+    /// <summary>Stop every live pulse. A Forever clock keeps WPF rendering at full frame rate for
+    /// as long as it runs — even on elements a rebuild has already discarded, or while this window
+    /// is hidden/minimised — and that constant frame churn starved the pill's and main window's own
+    /// repaints down to one every few seconds. Detaching the clock from its property isn't enough
+    /// (it stays in the timing tree, still ticking, until collected), so it's removed outright.
+    /// Pulses are stopped on every full rebuild (the new render starts its own) and whenever the
+    /// window isn't on screen.</summary>
+    private void StopBreathing()
+    {
+        foreach (var (target, prop, clock) in _breathing)
+        {
+            clock.Controller?.Remove();
+            target.ApplyAnimationClock(prop, null);
+        }
+        _breathing.Clear();
+    }
+
+    private readonly List<(IAnimatable target, DependencyProperty prop, AnimationClock clock)> _breathing = new();
+
+    /// <summary>Hidden (closed — the window is reused) or minimised: nothing here is on screen.</summary>
+    private bool Offscreen => !IsVisible || WindowState == WindowState.Minimized;
+
     private static DoubleAnimation BreathingAnimation(double from, double to, TimeSpan half)
     {
         double cycleMs = half.TotalMilliseconds * 2;
@@ -171,6 +200,7 @@ public partial class TimesheetWindow : Window
         // live-update wiring rather than relying on a fresh instance to pick up new state.
         A.Tick += OnTick;
         A.StateChanged += OnStateChanged;
+        IsVisibleChanged += (_, e) => { if (!(bool)e.NewValue) StopBreathing(); };
         InitAi();
     }
 
@@ -212,7 +242,7 @@ public partial class TimesheetWindow : Window
         // A drag in progress owns the canvas (and the mouse capture on one of its elements) —
         // rebuilding out from under it would tear down the very Border being dragged. CommitDrag
         // does its own re-render once the drag actually ends, picking this change up then.
-        if (IsVisible && !SuspendRerender) RenderCurrentWeek(0);
+        if (!Offscreen && !SuspendRerender) RenderCurrentWeek(0);
     }
 
     // Once a second: keep the still-running block's segment growing live. Cheap — reuses the
@@ -234,7 +264,7 @@ public partial class TimesheetWindow : Window
     /// </summary>
     private void OnTick()
     {
-        if (!IsVisible || SuspendRerender) return;
+        if (Offscreen || SuspendRerender) return;
 
         // Nothing in EITHER view's display changes second-to-second unless today is actually part
         // of the displayed week — the live session (if any) belongs to the current week by
@@ -450,7 +480,15 @@ public partial class TimesheetWindow : Window
     private void Close_Click(object sender, RoutedEventArgs e) => Close();
 
     private void Window_StateChanged(object? sender, EventArgs e)
-        => MaxRestoreBtn.Content = WindowState == WindowState.Maximized ? "❐" : "▢";
+    {
+        MaxRestoreBtn.Content = WindowState == WindowState.Maximized ? "❐" : "▢";
+        // OnTick skips while minimised, so catch up (and restart the live pulse) on restore.
+        if (WindowState == WindowState.Minimized) StopBreathing();
+        else if (_wasMinimized && IsVisible && !SuspendRerender) RenderCurrentWeek(0);
+        _wasMinimized = WindowState == WindowState.Minimized;
+    }
+
+    private bool _wasMinimized;
 
     // ==================== week navigation ====================
 
@@ -740,6 +778,7 @@ public partial class TimesheetWindow : Window
 
     private void RenderCurrentWeek(int slideDirection, bool crossFade = false)
     {
+        StopBreathing();
         if (_viewMode == ViewMode.Project)
         {
             RenderCurrentMonth(slideDirection, crossFade);
@@ -1209,7 +1248,7 @@ public partial class TimesheetWindow : Window
             var liveBorder = new SolidColorBrush(Lighten(baseColor, 0.4));
             seg.BorderBrush = liveBorder;
             seg.BorderThickness = new Thickness(2);
-            liveBorder.BeginAnimation(SolidColorBrush.OpacityProperty, BreathingAnimation(0.55, 1.0, TimeSpan.FromMilliseconds(900)));
+            Breathe(liveBorder, SolidColorBrush.OpacityProperty, 0.55, 1.0);
         }
 
         var content = new Grid();
@@ -1229,7 +1268,7 @@ public partial class TimesheetWindow : Window
                 titleRow.Children.Add(title);
                 var dot = new TextBlock { Text = "  ●", FontSize = 11, FontWeight = FontWeights.SemiBold, Foreground = ink };
                 // Phase-locked (see BreathingAnimation) because the live segment is rebuilt every second.
-                dot.BeginAnimation(OpacityProperty, BreathingAnimation(1.0, 0.3, TimeSpan.FromMilliseconds(900)));
+                Breathe(dot, OpacityProperty, 1.0, 0.3);
                 titleRow.Children.Add(dot);
                 labels.Children.Add(titleRow);
             }
@@ -1738,7 +1777,7 @@ public partial class TimesheetWindow : Window
                     var liveBorder = new SolidColorBrush(Lighten(baseColor, 0.4));
                     block.BorderBrush = liveBorder;
                     block.BorderThickness = new Thickness(2);
-                    liveBorder.BeginAnimation(SolidColorBrush.OpacityProperty, BreathingAnimation(0.55, 1.0, TimeSpan.FromMilliseconds(900)));
+                    Breathe(liveBorder, SolidColorBrush.OpacityProperty, 0.55, 1.0);
                 }
 
                 // The block's content is always a Grid (even when there's nothing to label) so
