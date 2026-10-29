@@ -305,3 +305,40 @@ public class CsvTests
         Assert.Equal(new[] { "BRIDGE-42", "note, with comma", "and \"quotes\"" }, parsed);
     }
 }
+
+public class CsvLogCacheTests : IDisposable
+{
+    private readonly string _dir = Path.Combine(Path.GetTempPath(), "tt-cache-tests-" + Guid.NewGuid().ToString("N"));
+    private readonly CsvLog _log;
+
+    public CsvLogCacheTests() => _log = new CsvLog(new AppPaths(_dir));
+
+    public void Dispose() { try { Directory.Delete(_dir, true); } catch { } }
+
+    private static TimeBlock Block(int hour) => new()
+    {
+        ProjectCode = "P", StartLocal = new DateTime(2026, 7, 21, hour, 0, 0),
+        EndLocal = new DateTime(2026, 7, 21, hour + 1, 0, 0), DurationSeconds = 3600,
+    };
+
+    [Fact]
+    public void ReadMonth_SeesOwnWritesAndOutsideEdits_AndCallerMutationsDontLeak()
+    {
+        _log.Append(Block(8));
+        Assert.Single(_log.ReadMonth(2026, 7));
+
+        _log.Append(Block(10));
+        var blocks = _log.ReadMonth(2026, 7);
+        Assert.Equal(2, blocks.Count);
+
+        blocks[0].Notes = "mutated";
+        Assert.Equal("", _log.ReadMonth(2026, 7)[0].Notes);
+
+        var file = Directory.GetFiles(_dir, "log-2026-07*.csv").Single();
+        File.AppendAllText(file, File.ReadAllLines(file)[1] + Environment.NewLine);
+        Assert.Equal(3, _log.ReadMonth(2026, 7).Count);
+
+        Assert.True(_log.DeleteBlock(blocks[1]));
+        Assert.Equal(2, _log.ReadMonth(2026, 7).Count);
+    }
+}

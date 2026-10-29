@@ -36,6 +36,7 @@ public sealed class CsvLog
 
         var file = _paths.LogFileFor(b.StartLocal);
         bool isNew = !File.Exists(file);
+        Invalidate(file);
         using var w = new StreamWriter(file, append: true);
         if (isNew) w.WriteLine(Csv.Line(Header));
         w.WriteLine(Csv.Line(new[]
@@ -55,13 +56,45 @@ public sealed class CsvLog
         }));
     }
 
+    /// <summary>Parsed month files, keyed by path and stamped with the file's last-write time and
+    /// length. The UI asks for today's blocks every second, but this app is the only writer, so
+    /// re-reading and re-parsing the file each time was pure waste (and tripped over transient file
+    /// locks). A stat per call is enough to notice any change, including an outside edit or a
+    /// OneDrive sync; our own writes also drop the entry explicitly.</summary>
+    private readonly Dictionary<string, (DateTime Stamp, long Length, List<TimeBlock> Blocks)> _monthCache = new();
+    private readonly object _cacheGate = new();
+
+    private void Invalidate(string file) { lock (_cacheGate) _monthCache.Remove(file); }
+
+    private static TimeBlock Copy(TimeBlock b) => new()
+    {
+        Id = b.Id, ProjectId = b.ProjectId, ProjectCode = b.ProjectCode, Asn = b.Asn, ProjectName = b.ProjectName,
+        StartLocal = b.StartLocal, EndLocal = b.EndLocal, DurationSeconds = b.DurationSeconds,
+        Notes = b.Notes, Unscheduled = b.Unscheduled,
+    };
+
     /// <summary>Read every block recorded in the given month's file.</summary>
     public List<TimeBlock> ReadMonth(int year, int month)
     {
         var file = _paths.LogFileFor(new DateTime(year, month, 1));
-        var result = new List<TimeBlock>();
-        if (!File.Exists(file)) return result;
+        var info = new FileInfo(file);
+        if (!info.Exists) { Invalidate(file); return new List<TimeBlock>(); }
 
+        lock (_cacheGate)
+        {
+            if (!_monthCache.TryGetValue(file, out var hit) || hit.Stamp != info.LastWriteTimeUtc || hit.Length != info.Length)
+            {
+                hit = (info.LastWriteTimeUtc, info.Length, ParseMonth(file));
+                _monthCache[file] = hit;
+            }
+            // Copies, so a caller editing a block can never corrupt the cache.
+            return hit.Blocks.Select(Copy).ToList();
+        }
+    }
+
+    private static List<TimeBlock> ParseMonth(string file)
+    {
+        var result = new List<TimeBlock>();
         foreach (var line in File.ReadLines(file).Skip(1)) // skip header
         {
             if (string.IsNullOrWhiteSpace(line)) continue;
@@ -125,6 +158,7 @@ public sealed class CsvLog
 
             lines.RemoveAt(i);
             File.WriteAllLines(file, lines);
+            Invalidate(file);
             return true;
         }
         return false;
@@ -181,6 +215,7 @@ public sealed class CsvLog
                 updated.Unscheduled ? "1" : "0",
             });
             File.WriteAllLines(file, lines);
+            Invalidate(file);
             return true;
         }
         return false;
