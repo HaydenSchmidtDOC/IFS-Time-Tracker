@@ -173,7 +173,20 @@ public partial class TimesheetWindow : Window
     /// <summary>Whether an interactive, in-progress calendar-view gesture owns the canvas right
     /// now — the shared guard against the once-a-second/resize/state-change auto-rebuilds
     /// tearing it out from under the user (see _drag, _confirmingDelete, _addDragging).</summary>
-    private bool SuspendRerender => _drag is not null || _confirmingDelete || _addDragging || _aiMenuOpen;
+    private bool SuspendRerender => _drag is not null || _confirmingDelete || _addDragging || _aiMenuOpen || _dialogOpen;
+
+    /// <summary>True while an AddTimeDialog opened from here is up. Its modal loop keeps the
+    /// per-second tick (and AI/state refreshes) running, and any of those that falls back to a full
+    /// RenderCurrentWeek would rebuild the canvas underneath the mouse handler that opened the
+    /// dialog. Every caller re-renders itself once the dialog returns.</summary>
+    private bool _dialogOpen;
+
+    private bool ShowTimeDialog(Func<bool> show)
+    {
+        _dialogOpen = true;
+        try { return show(); }
+        finally { _dialogOpen = false; }
+    }
 
     public TimesheetWindow()
     {
@@ -314,9 +327,14 @@ public partial class TimesheetWindow : Window
         {
             if (!A.Tracker.IsRunning || A.Tracker.State.BlockStartUtc is not DateTime startUtc) return false;
             var startLocal = startUtc.ToLocalTime();
-            if (now.Date != startLocal.Date) return false; // crossed midnight — needs a real re-layout, not a patch
+            // The block is drawn in one day's column; only the rollover itself needs a real
+            // re-layout (to move it to the new day). A session that started on an earlier day is
+            // clamped to this column's midnight, same as BuildCalendar — patching it here instead
+            // of falling back is what stops an overnight session rebuilding the whole canvas
+            // every second for as long as it keeps running.
+            if (now.Date != _liveTickDay) return false;
 
-            double startH = startLocal.TimeOfDay.TotalHours;
+            double startH = startLocal.Date < now.Date ? 0.0 : startLocal.TimeOfDay.TotalHours;
             double endH = now.TimeOfDay.TotalHours;
             double newHeight = Math.Max(3, (endH - startH) * CalendarPxPerHour);
 
@@ -578,7 +596,7 @@ public partial class TimesheetWindow : Window
     /// double-click-to-add (see BuildCalendar) is the other entry point into the same dialog.</summary>
     private void AddTime_Click(object sender, RoutedEventArgs e)
     {
-        bool added = AddTimeDialog.Ask(this, DateTime.Today);
+        bool added = ShowTimeDialog(() => AddTimeDialog.Ask(this, DateTime.Today));
         if (added) { _cachedWeekStart = null; RenderCurrentWeek(0); }
     }
 
@@ -1438,7 +1456,7 @@ public partial class TimesheetWindow : Window
             plusBtn.MouseLeftButtonUp += (_, e) =>
             {
                 e.Handled = true;
-                bool added = AddTimeDialog.Ask(this, dayForAdd);
+                bool added = ShowTimeDialog(() => AddTimeDialog.Ask(this, dayForAdd));
                 if (added) { _cachedWeekStart = null; RenderCurrentWeek(0); }
             };
             canvas.Children.Add(plusBtn);
@@ -1510,6 +1528,8 @@ public partial class TimesheetWindow : Window
     /// there to begin with, so a session that started sub-threshold would otherwise keep growing
     /// tick after tick with no title ever appearing. See TryUpdateLiveCalendarInPlace.</summary>
     private bool _liveTickBlockLabeled;
+    /// <summary>The day column the live block was rendered into — see TryUpdateLiveCalendarInPlace.</summary>
+    private DateTime _liveTickDay;
 
     private FrameworkElement BuildCalendar(Dictionary<DateTime, List<TimeBlock>> byDay, TimeBlock? liveBlock,
         double width, double height, DateTime today)
@@ -1902,6 +1922,7 @@ public partial class TimesheetWindow : Window
                 if (isLive)
                 {
                     _liveTickBlockElement = block;
+                    _liveTickDay = day;
                     _liveTickTimeLabel = timeLabel;
                     _liveTickBlockLabeled = segH >= 16 && resolved is not null;
                 }
@@ -2008,7 +2029,7 @@ public partial class TimesheetWindow : Window
                     chip.MouseLeftButtonUp += (_, e) =>
                     {
                         e.Handled = true;
-                        bool changed = AddTimeDialog.AskEdit(this, capturedUnscheduled);
+                        bool changed = ShowTimeDialog(() => AddTimeDialog.AskEdit(this, capturedUnscheduled));
                         if (changed) { _cachedWeekStart = null; RenderCurrentWeek(0); }
                     };
                 }
@@ -2353,7 +2374,7 @@ public partial class TimesheetWindow : Window
                 var (clippedStart, clippedEnd) = AddTimeDialog.ClipDragToEdges(addDay, rangeStart, rangeEnd);
                 if (clippedEnd <= clippedStart) return; // fully swallowed by one existing block — nothing left to add
 
-                bool added = AddTimeDialog.AskAtTime(this, addDay, clippedStart, clippedEnd);
+                bool added = ShowTimeDialog(() => AddTimeDialog.AskAtTime(this, addDay, clippedStart, clippedEnd));
                 if (added) { _cachedWeekStart = null; RenderCurrentWeek(0); }
                 return;
             }
@@ -2368,7 +2389,7 @@ public partial class TimesheetWindow : Window
             if (!d.IsResize && Math.Abs(upPos.Y - d.StartMouseY) < ClickThresholdPx && Math.Abs(upPos.X - d.StartMouseX) < ClickThresholdPx)
             {
                 _drag = null;
-                bool changed = AddTimeDialog.AskEdit(this, d.Block);
+                bool changed = ShowTimeDialog(() => AddTimeDialog.AskEdit(this, d.Block));
                 if (changed) _cachedWeekStart = null;
                 RenderCurrentWeek(0); // also restores the element's position from any sub-threshold jitter
                 return;
@@ -2455,7 +2476,7 @@ public partial class TimesheetWindow : Window
                 double clickedMinutes = pos.Y / CalendarPxPerHour * 60;
                 double snappedMinutes = Clamp(Math.Round(clickedMinutes / 30.0) * 30.0, 0, 24 * 60 - 30);
                 e.Handled = true;
-                bool added = AddTimeDialog.AskAtTime(this, clickedDay, TimeSpan.FromMinutes(snappedMinutes));
+                bool added = ShowTimeDialog(() => AddTimeDialog.AskAtTime(this, clickedDay, TimeSpan.FromMinutes(snappedMinutes)));
                 if (added) { _cachedWeekStart = null; RenderCurrentWeek(0); }
                 return;
             }
