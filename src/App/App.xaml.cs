@@ -186,7 +186,7 @@ public partial class App : Application
         _uiTimer = new DispatcherTimer(DispatcherPriority.Normal) { Interval = TimeSpan.FromSeconds(1) };
         // Checked first, before Tick fires — if it stops the session, everything Tick refreshes
         // (pill, timesheet, tray) should already see the post-stop state, not lag a tick behind.
-        _uiTimer.Tick += (_, _) => { CheckForLiveCollisionWithPrompt(); Tick?.Invoke(); UpdateTrayTooltip(); };
+        _uiTimer.Tick += (_, _) => { Tracker.RollOverMidnight(); CheckForLiveCollisionWithPrompt(); Tick?.Invoke(); UpdateTrayTooltip(); };
         _uiTimer.Start();
 
         UpdateTray();

@@ -251,6 +251,7 @@ public sealed class TrackerService
     {
         if (!IsRunning || Active is null) return;
         var project = Active;
+        SplitAtMidnights(idleStartUtc);
         // Only truncate if the idle start is within the current block.
         if (_state.BlockStartUtc is DateTime start && idleStartUtc > start)
         {
@@ -275,6 +276,7 @@ public sealed class TrackerService
     /// resolved one way or the other and mustn't leak into whatever gets tracked next.</summary>
     private void FinishCurrentBlock(DateTime endUtc, string notes)
     {
+        SplitAtMidnights(endUtc);
         BankCurrent(endUtc, notes);
         if (!string.IsNullOrWhiteSpace(notes))
         {
@@ -289,6 +291,34 @@ public sealed class TrackerService
             }
         }
         _pendingNoteBlocks.Clear();
+    }
+
+    /// <summary>Called once a second by the UI: when the running block has crossed local midnight,
+    /// banks the part before midnight and carries on with a fresh block from 00:00 — so every log
+    /// row (and the cost/time totals built on it) belongs to exactly one day. The banked halves are
+    /// linked like idle-discard splits, so the note typed when the session finally ends lands on all
+    /// of them.</summary>
+    public void RollOverMidnight()
+    {
+        if (SplitAtMidnights(_utcNow())) { _store.SaveState(_state); Changed?.Invoke(); }
+    }
+
+    /// <summary>Banks the running block at each local midnight falling strictly between its start and
+    /// <paramref name="uptoUtc"/>, restarting it at that midnight. Returns true if it split anything.</summary>
+    private bool SplitAtMidnights(DateTime uptoUtc)
+    {
+        if (Active is null || _state.BlockStartUtc is not DateTime start) return false;
+        bool split = false;
+        while (true)
+        {
+            var midnightUtc = DateTime.SpecifyKind(start.ToLocalTime().Date.AddDays(1), DateTimeKind.Local).ToUniversalTime();
+            if (midnightUtc >= uptoUtc) break;
+            var banked = BankCurrent(midnightUtc, "");
+            if (banked is not null) _pendingNoteBlocks.Add(banked);
+            _state.BlockStartUtc = start = midnightUtc;
+            split = true;
+        }
+        return split;
     }
 
     /// <summary>Append the current block to the log, ending at <paramref name="endUtc"/>. Returns

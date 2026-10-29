@@ -121,6 +121,43 @@ public class TrackerServiceTests : IDisposable
     }
 
     [Fact]
+    public void LiveBlockCrossingMidnight_IsSplitPerDay_AndFinalNoteCoversAllRows()
+    {
+        var svc = NewService();
+        var a = P("CONV-CAL", "100320");
+        svc.AddProject(a);
+
+        _now = new DateTime(2026, 7, 21, 0, 0, 0, DateTimeKind.Local).AddHours(23).ToUniversalTime();
+        svc.StartOrSwitch(a);
+        _now = _now.AddHours(2);          // 01:00 next day
+        svc.RollOverMidnight();           // tick after midnight
+        Assert.True(svc.IsRunning);
+        _now = _now.AddHours(1);          // 02:00
+        svc.Stop("overnight run");
+
+        var blocks = _log.ReadMonth(2026, 7).OrderBy(b => b.StartLocal).ToList();
+        Assert.Equal(2, blocks.Count);
+        Assert.Equal(new DateTime(2026, 7, 22), blocks[0].EndLocal);
+        Assert.Equal(blocks[0].EndLocal, blocks[1].StartLocal);
+        Assert.Equal(3600, blocks[0].DurationSeconds);
+        Assert.Equal(7200, blocks[1].DurationSeconds);
+        Assert.All(blocks, b => Assert.Equal("overnight run", b.Notes));
+    }
+
+    [Fact]
+    public void StopAfterMidnightWithoutTick_StillSplitsAtMidnight()
+    {
+        var svc = NewService();
+        var a = P("X", "1");
+        svc.AddProject(a);
+        _now = new DateTime(2026, 7, 21, 23, 0, 0, DateTimeKind.Local).ToUniversalTime();
+        svc.StartOrSwitch(a);
+        _now = _now.AddHours(3);
+        svc.Stop();
+        Assert.Equal(2, _log.ReadMonth(2026, 7).Count);
+    }
+
+    [Fact]
     public void NoteOnStop_BackfillsOntoBlocksSplitByEarlierIdleDiscards()
     {
         var svc = NewService();
