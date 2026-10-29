@@ -82,7 +82,9 @@ public sealed class AiSessionService
                 };
                 _sessions.Add(created);
             }
-            Save();
+            // A brand-new session can't be rebuilt from a transcript (its project assignment lives
+            // only here), so it's written straight away; a repeat ping only bumps LastSeen.
+            if (created is not null) Save(); else SaveDeferred();
         }
         if (created is not null) SessionStarted?.Invoke(Clone(created));
         Changed?.Invoke();
@@ -105,7 +107,7 @@ public sealed class AiSessionService
             s.CostSource = "statusline";
             s.LastSeenUtc = DateTime.UtcNow;
             if (!string.IsNullOrEmpty(msg.Model)) s.Model = msg.Model;
-            Save();
+            SaveDeferred();
         }
         Changed?.Invoke();
     }
@@ -171,9 +173,37 @@ public sealed class AiSessionService
         return new();
     }
 
+    /// <summary>How long a cost/keep-alive ping may sit unwritten. The statusline reports a
+    /// cumulative total, so the next ping restores anything lost, and a transcript refresh can
+    /// rebuild the rest — pings arrive far more often than the data actually needs persisting.</summary>
+    private static readonly TimeSpan FlushDelay = TimeSpan.FromSeconds(5);
+    private System.Threading.Timer? _flushTimer;
+    private bool _dirty;
+
+    /// <summary>Marks the sessions changed and writes them after <see cref="FlushDelay"/>, coalescing
+    /// any pings in between. Caller holds the lock.</summary>
+    private void SaveDeferred()
+    {
+        _snapshot = null;
+        _dirty = true;
+        _flushTimer ??= new System.Threading.Timer(_ => Flush(), null, Timeout.Infinite, Timeout.Infinite);
+        _flushTimer.Change(FlushDelay, Timeout.InfiniteTimeSpan);
+    }
+
+    /// <summary>Writes any pending deferred changes now. Called on app exit.</summary>
+    public void Flush()
+    {
+        lock (_gate)
+        {
+            if (!_dirty) return;
+            try { Save(); } catch { _dirty = true; /* disk hiccup — the next ping re-arms the write */ }
+        }
+    }
+
     private void Save()
     {
         _snapshot = null;
+        _dirty = false;
         var tmp = _paths.AiSessionsFile + ".tmp";
         File.WriteAllText(tmp, JsonSerializer.Serialize(_sessions, Opts));
         if (File.Exists(_paths.AiSessionsFile)) File.Replace(tmp, _paths.AiSessionsFile, null);

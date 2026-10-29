@@ -167,6 +167,17 @@ public sealed class AiUsageTests : IDisposable
     }
 
     [Fact]
+    public void Cost_pings_are_written_on_flush_not_immediately()
+    {
+        var svc = Svc();
+        svc.Handle(Start("s1"));
+        svc.Handle(new AiPipeMessage { Kind = "cost", SessionId = "s1", TotalCostUsd = 2.5 });
+        Assert.Equal(0, Svc().Snapshot()[0].CostUsd); // new session was written at once; the ping is still pending
+        svc.Flush();
+        Assert.Equal(2.5, Svc().Snapshot()[0].CostUsd, 6);
+    }
+
+    [Fact]
     public void Records_persist_across_instances()
     {
         Svc().Handle(Start("s1"));

@@ -736,6 +736,7 @@ public partial class App : Application
     protected override void OnExit(ExitEventArgs e)
     {
         _aiPipe?.Dispose();
+        AiSessions?.Flush();
         if (_ownsInstanceMutex) _instanceMutex?.ReleaseMutex();
         _instanceMutex?.Dispose();
         base.OnExit(e);
