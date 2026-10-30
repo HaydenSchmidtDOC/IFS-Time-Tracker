@@ -2601,6 +2601,13 @@ public partial class TimesheetWindow : Window
                 }
             }
 
+            // Hide whatever hangs past this column's 0..24h; the ghost below shows it on its own day.
+            double clipTop = Math.Max(0, -Canvas.GetTop(d.Element));
+            double clipBot = Math.Min(d.Element.Height, gridHeight - Canvas.GetTop(d.Element));
+            d.Element.Clip = clipTop > 0 || clipBot < d.Element.Height
+                ? new RectangleGeometry(new Rect(-2, clipTop, barW + 4, Math.Max(0, clipBot - clipTop)))
+                : null;
+
             // Preview the part of the dragged span that falls on other days (a block pulled past
             // midnight has no rendered piece there yet).
             foreach (var g in dragGhosts) canvas.Children.Remove(g);
@@ -2657,6 +2664,7 @@ public partial class TimesheetWindow : Window
 
             foreach (var g in dragGhosts) canvas.Children.Remove(g);
             dragGhosts.Clear();
+            if (_drag is { } clipD) clipD.Element.Clip = null;
             if (_drag is not { } d) { canvas.ReleaseMouseCapture(); return; }
             canvas.ReleaseMouseCapture();
 
