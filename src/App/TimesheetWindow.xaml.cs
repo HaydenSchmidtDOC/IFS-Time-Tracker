@@ -2115,6 +2115,59 @@ public partial class TimesheetWindow : Window
         double MinutesToY(double minutes) => minutes / 60.0 * CalendarPxPerHour;
         double SnapTo(double rawMinutes, int step) => Math.Round(rawMinutes / step) * (double)step;
 
+        // ---- One snapping set for drags, resizes and drawing ----
+        // Times snap to the drag grid, then pull onto a "magnet" when one is within a few pixels:
+        // the edge of any other block in view (including midnight cuts) and "now" (so a block can
+        // be drawn or dragged right up to the current time).
+        var magnets = new List<(DateTime T, string Id)>();
+        static DateTime TruncMin(DateTime t) => new(t.Ticks - t.Ticks % TimeSpan.TicksPerMinute);
+        foreach (var list in byDay.Values)
+            foreach (var mb in list)
+            {
+                if (mb.Unscheduled) continue;
+                magnets.Add((TruncMin(mb.StartLocal), mb.Id));
+                magnets.Add((TruncMin(mb.EndLocal), mb.Id));
+            }
+        magnets.Add((TruncMin(DateTime.Now), ""));
+        const double SnapMagnetPx = 7;
+        double MagnetMinutes() => SnapMagnetPx / CalendarPxPerHour * 60.0;
+
+        // Nearest magnet to `t` within reach (ignoring the row being dragged), else null.
+        DateTime? NearestMagnet(DateTime t, string? excludeId, out double distMin)
+        {
+            DateTime? best = null;
+            distMin = double.MaxValue;
+            double reach = MagnetMinutes();
+            foreach (var (mt, id) in magnets)
+            {
+                if (excludeId is not null && id == excludeId) continue;
+                double dist = Math.Abs((mt - t).TotalMinutes);
+                if (dist <= reach && dist < distMin) { best = mt; distMin = dist; }
+            }
+            return best;
+        }
+
+        DateTime SnapTime(DateTime raw, string? excludeId)
+        {
+            if (NearestMagnet(raw, excludeId, out _) is DateTime m) return m;
+            return raw.Date + TimeSpan.FromMinutes(SnapTo(raw.TimeOfDay.TotalMinutes, Math.Max(1, A.Settings.DragSnapMinutes)));
+        }
+
+        // Snaps a span of fixed length by whichever of its two edges has the closer magnet,
+        // falling back to the grid for the start.
+        DateTime SnapSpanStart(DateTime rawStart, TimeSpan length, string? excludeId)
+        {
+            var ms = NearestMagnet(rawStart, excludeId, out var ds);
+            var me = NearestMagnet(rawStart + length, excludeId, out var de);
+            if (ms is not null && (me is null || ds <= de)) return ms.Value;
+            if (me is not null) return me.Value - length;
+            return SnapTime(rawStart, excludeId);
+        }
+
+        // Minutes-on-`day` flavour for the pixel-based resize code.
+        double SnapMinutesOn(DateTime day, double rawMinutes, string? excludeId)
+            => (SnapTime(day.AddMinutes(rawMinutes), excludeId) - day).TotalMinutes;
+
         // Shared by the move-drag's MouseMove (to withhold any visual movement/snapping until a
         // press has actually left click range) and MouseLeftButtonUp (to tell a genuine drag from
         // a stray click) — see both use sites for the full story.
@@ -2142,8 +2195,8 @@ public partial class TimesheetWindow : Window
         {
             int snap = Math.Max(1, A.Settings.DragSnapMinutes);
             int curIdx = Math.Clamp((int)((mouse.X - yAxisW) / dayW), 0, days.Count - 1);
-            var a = addDay.AddMinutes(Clamp(SnapTo(YToMinutes(addAnchorY), snap), 0, 24 * 60));
-            var c = days[curIdx].AddMinutes(Clamp(SnapTo(YToMinutes(Clamp(mouse.Y, 0, gridHeight)), snap), 0, 24 * 60));
+            var a = SnapTime(addDay.AddMinutes(Clamp(YToMinutes(addAnchorY), 0, 24 * 60)), null);
+            var c = SnapTime(days[curIdx].AddMinutes(Clamp(YToMinutes(Clamp(mouse.Y, 0, gridHeight)), 0, 24 * 60)), null);
             var st = a < c ? a : c;
             var en = a < c ? c : a;
             if (en <= st)
@@ -2258,7 +2311,7 @@ public partial class TimesheetWindow : Window
                 // snapped so its start lands on the grid; each day's piece re-derives from that.
                 int snapMin = Math.Max(1, A.Settings.DragSnapMinutes);
                 var raw = row.StartLocal + (d.CurrentDay - d.Day) + TimeSpan.FromMinutes(YToMinutes(mouseY - d.StartMouseY));
-                var ns = raw.Date + TimeSpan.FromMinutes(SnapTo(raw.TimeOfDay.TotalMinutes, snapMin));
+                var ns = SnapSpanStart(raw, row.EndLocal - row.StartLocal, row.Id);
                 return (ns, row.EndLocal + (ns - row.StartLocal));
             }
             return (d.CurrentDay + TimeSpan.FromMinutes(YToMinutes(top)), d.CurrentDay + TimeSpan.FromMinutes(YToMinutes(top + height)));
@@ -2444,7 +2497,7 @@ public partial class TimesheetWindow : Window
                 int snap = Math.Max(1, A.Settings.DragSnapMinutes);
                 if (d.ResizeTop)
                 {
-                    double newTop = Clamp(MinutesToY(SnapTo(YToMinutes(d.OrigTop + deltaY), snap)), d.LowBound, d.HighBound);
+                    double newTop = Clamp(MinutesToY(SnapMinutesOn(d.Day, YToMinutes(d.OrigTop + deltaY), (d.Block.Whole ?? d.Block).Id)), d.LowBound, d.HighBound);
                     Canvas.SetTop(d.Element, newTop);
                     d.Element.Height = Math.Max(MinBlockPx, d.OrigTop + d.OrigHeight - newTop);
                     if (d.NeighborElement is not null)
@@ -2461,7 +2514,7 @@ public partial class TimesheetWindow : Window
                 }
                 else
                 {
-                    double newBottom = Clamp(MinutesToY(SnapTo(YToMinutes(d.OrigTop + d.OrigHeight + deltaY), snap)), d.LowBound, d.HighBound);
+                    double newBottom = Clamp(MinutesToY(SnapMinutesOn(d.Day, YToMinutes(d.OrigTop + d.OrigHeight + deltaY), (d.Block.Whole ?? d.Block).Id)), d.LowBound, d.HighBound);
                     d.Element.Height = Math.Max(MinBlockPx, newBottom - d.OrigTop);
                     if (d.NeighborElement is not null)
                     {
@@ -2491,16 +2544,18 @@ public partial class TimesheetWindow : Window
                 double totalDx = e.GetPosition(canvas).X - d.StartMouseX;
                 if (Math.Abs(deltaY) < ClickThresholdPx && Math.Abs(totalDx) < ClickThresholdPx) return;
 
-                int snap = Math.Max(1, A.Settings.DragSnapMinutes);
-                double newTop = Clamp(MinutesToY(SnapTo(YToMinutes(d.OrigTop + deltaY), snap)), d.LowBound, d.HighBound);
-                Canvas.SetTop(d.Element, newTop);
-
                 // Cross-day: snap horizontally to whichever day column the cursor is currently
                 // over (blocks always sit centred in their column, so there's no fractional-X to
                 // preserve — same all-or-nothing snap the double-click-to-add handler uses).
                 double mouseX = e.GetPosition(canvas).X;
                 int dayIndex = Math.Clamp((int)((mouseX - yAxisW) / dayW), 0, days.Count - 1);
                 var targetDay = days[dayIndex];
+                // Snap the dropped top (or bottom) edge onto grid/other blocks/now, judged on the
+                // day column it's currently over.
+                var rawMoveStart = targetDay.AddMinutes(YToMinutes(d.OrigTop + deltaY));
+                var snappedMoveStart = SnapSpanStart(rawMoveStart, TimeSpan.FromMinutes(YToMinutes(d.OrigHeight)), (d.Block.Whole ?? d.Block).Id);
+                double newTop = Clamp(MinutesToY((snappedMoveStart - targetDay).TotalMinutes), d.LowBound, d.HighBound);
+                Canvas.SetTop(d.Element, newTop);
                 double targetCx = yAxisW + dayW * dayIndex + geom.HoursCx;
                 Canvas.SetLeft(d.Element, targetCx - barW / 2);
                 d.CurrentDay = targetDay;
