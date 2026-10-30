@@ -2411,7 +2411,7 @@ public partial class TimesheetWindow : Window
                     neighborOrigHeight = np.Item2.Height;
                     low = neighborIsHardStop ? neighborOrigTop + neighborOrigHeight : neighborOrigTop + nMin;
                 }
-                else low = 0;
+                else low = -gridHeight; // no neighbour: may run up into the previous day
             }
             else
             {
@@ -2422,7 +2422,7 @@ public partial class TimesheetWindow : Window
                     neighborOrigHeight = np.Item2.Height;
                     high = neighborIsHardStop ? neighborOrigTop : neighborOrigTop + neighborOrigHeight - nMin;
                 }
-                else high = gridHeight;
+                else high = gridHeight * 2; // no neighbour: may run down into the next day
             }
             if (low > high) low = high; // degenerate — neighbour's already at its own minimum; pin rather than invert
 
@@ -2458,7 +2458,7 @@ public partial class TimesheetWindow : Window
             double high = gridHeight - origHeight;
             // A slice of a midnight-crossing row moves the whole row, so it may slide partly off
             // its own day (the other half grows); the real result is computed at MouseUp.
-            if (block.Whole is not null) { low = MinBlockPx - origHeight; high = gridHeight - MinBlockPx; }
+            { low = MinBlockPx - origHeight; high = gridHeight - MinBlockPx; }
             if (low > high) low = high;
 
             _drag = new DragState
