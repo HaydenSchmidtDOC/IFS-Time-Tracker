@@ -1037,7 +1037,7 @@ public partial class TimesheetWindow : Window
             footer.Children.Add(new TextBlock
             {
                 Text = p.Code, FontSize = 11.5, FontWeight = FontWeights.Medium, Foreground = dimBrush,
-                TextAlignment = TextAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(4, 0, 4, 0),
+                TextAlignment = TextAlignment.Center, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(4, 0, 4, 0),
             });
             footer.Children.Add(new TextBlock
             {
@@ -1229,7 +1229,7 @@ public partial class TimesheetWindow : Window
             if (!string.IsNullOrWhiteSpace(g.Note)) tooltip += $"\nNote: {g.Note}";
 
             kept.Add(new ChartSegment(
-                Label: $"{p.Code} · {g.Hours:0.#}h",
+                Label: p.Code,
                 Asn: p.Asn,
                 Hours: g.Hours,
                 Fill: ColorUtil.Brush(p.Color),
@@ -1242,7 +1242,7 @@ public partial class TimesheetWindow : Window
         {
             var breakdown = string.Join("\n", folded.OrderByDescending(f => f.Hours).Select(f => $"{f.Code}: {f.Hours:0.0} h"));
             kept.Add(new ChartSegment(
-                Label: $"Other · {foldedTotal:0.#}h",
+                Label: "Other",
                 Asn: null,
                 Hours: foldedTotal,
                 Fill: otherFill,
@@ -1283,18 +1283,27 @@ public partial class TimesheetWindow : Window
             var ink = new SolidColorBrush(SystemAccent.ReadableInk(baseColor));
             var labels = new StackPanel { VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(6, 4, 6, 2) };
 
+            // Hours sit on their own line under the title when there's room; in a short box they
+            // stay inline so the count is never dropped.
+            string hoursText = $"{seg0.Hours:0.#}h";
+            bool hoursOwnLine = segH >= 34;
             var title = new TextBlock
             {
-                Text = seg0.Label, FontSize = 11, FontWeight = FontWeights.SemiBold, Foreground = ink,
-                TextTrimming = TextTrimming.CharacterEllipsis,
+                Text = hoursOwnLine ? seg0.Label : $"{seg0.Label} · {hoursText}",
+                FontSize = 11, FontWeight = FontWeights.SemiBold, Foreground = ink,
+                TextWrapping = TextWrapping.Wrap,
             };
             if (seg0.IsLive)
             {
-                var titleRow = new StackPanel { Orientation = Orientation.Horizontal };
+                // Grid (not a horizontal StackPanel) so a long title wraps instead of pushing the dot out.
+                var titleRow = new Grid();
+                titleRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                titleRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
                 titleRow.Children.Add(title);
                 var dot = new TextBlock { Text = "  ●", FontSize = 11, FontWeight = FontWeights.SemiBold, Foreground = ink };
                 // Phase-locked (see BreathingAnimation) because the live segment is rebuilt every second.
                 Breathe(dot, OpacityProperty, 1.0, 0.3);
+                Grid.SetColumn(dot, 1);
                 titleRow.Children.Add(dot);
                 labels.Children.Add(titleRow);
             }
@@ -1303,12 +1312,21 @@ public partial class TimesheetWindow : Window
                 labels.Children.Add(title);
             }
 
-            if (segH >= 36 && !string.IsNullOrEmpty(seg0.Asn))
+            if (hoursOwnLine)
+            {
+                labels.Children.Add(new TextBlock
+                {
+                    Text = hoursText, FontSize = 10, FontWeight = FontWeights.SemiBold, Foreground = ink, Opacity = 0.9,
+                    Margin = new Thickness(0, 1, 0, 0),
+                });
+            }
+
+            if (segH >= 50 && !string.IsNullOrEmpty(seg0.Asn))
             {
                 labels.Children.Add(new TextBlock
                 {
                     Text = $"ASN {seg0.Asn}", FontSize = 9, Foreground = ink, Opacity = 0.85,
-                    TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 1, 0, 0),
+                    TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 1, 0, 0),
                 });
             }
             content.Children.Add(labels);
@@ -1830,14 +1848,14 @@ public partial class TimesheetWindow : Window
                     labels.Children.Add(new TextBlock
                     {
                         Text = isLive ? resolved.Code + "  ●" : resolved.Code, FontSize = 10.5,
-                        FontWeight = FontWeights.SemiBold, Foreground = ink, TextTrimming = TextTrimming.CharacterEllipsis,
+                        FontWeight = FontWeights.SemiBold, Foreground = ink, TextWrapping = TextWrapping.Wrap,
                     });
                     if (segH >= 34)
                     {
                         timeLabel = new TextBlock
                         {
                             Text = $"{b.StartLocal:HH:mm}–{b.EndLocal:HH:mm}", FontSize = 9, Foreground = ink, Opacity = 0.85,
-                            TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 1, 0, 0),
+                            TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 1, 0, 0),
                         };
                         labels.Children.Add(timeLabel);
                     }
@@ -1849,7 +1867,7 @@ public partial class TimesheetWindow : Window
                         labels.Children.Add(new TextBlock
                         {
                             Text = b.Notes, FontSize = 9, Foreground = ink, Opacity = 0.5,
-                            TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 1, 0, 0),
+                            TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 1, 0, 0),
                         });
                     }
                     content.Children.Add(labels);
@@ -2033,7 +2051,7 @@ public partial class TimesheetWindow : Window
                     Text = overflowRow ? $"+{dayUnscheduled.Count - maxChipRows + 1} more" : $"{(resolvedU?.Code ?? ub.ProjectCode)} · {ub.DurationHours:0.#}h",
                     FontSize = 8.5, FontWeight = FontWeights.SemiBold, Foreground = dimBrush,
                     HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
-                    TextTrimming = TextTrimming.CharacterEllipsis,
+                    TextWrapping = TextWrapping.Wrap,
                 };
                 Canvas.SetLeft(chip, colLeft + 4);
                 Canvas.SetTop(chip, xAxisH + ci * chipRowH);

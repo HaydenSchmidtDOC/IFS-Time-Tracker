@@ -58,14 +58,14 @@ public partial class DayBlocksWindow : Window
             // are just a midnight-anchored placeholder — see TimeBlock.Unscheduled.
             Text = b.Unscheduled ? $"{b.ProjectCode}   no specific time" : $"{b.ProjectCode}   {b.StartLocal:HH:mm}–{b.EndLocal:HH:mm}",
             FontSize = 12.5, FontWeight = FontWeights.Medium, Foreground = (Brush)FindResource("Text"),
-            TextTrimming = TextTrimming.CharacterEllipsis,
+            TextWrapping = TextWrapping.Wrap,
         });
         if (!string.IsNullOrWhiteSpace(b.Notes))
         {
             info.Children.Add(new TextBlock
             {
                 Text = b.Notes, FontSize = 11, Foreground = (Brush)FindResource("TextFaint"),
-                TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 2, 0, 0),
+                TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 2, 0, 0),
             });
         }
         Grid.SetColumn(info, 1);
