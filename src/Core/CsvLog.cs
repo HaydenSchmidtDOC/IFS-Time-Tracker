@@ -20,7 +20,7 @@ public sealed class CsvLog
     {
         "Date", "ProjectCode", "ASN", "ProjectName",
         "StartLocal", "EndLocal", "DurationSeconds", "DurationHours", "Notes",
-        "ProjectId", "BlockId", "Unscheduled",
+        "ProjectId", "BlockId", "Unscheduled", "SessionId",
     };
 
     /// <summary>Minimum column count for a row to be considered parseable at all — the original
@@ -56,6 +56,7 @@ public sealed class CsvLog
         b.ProjectId,
         b.Id,
         b.Unscheduled ? "1" : "0",
+        b.SessionId,
     });
 
     /// <summary>Parsed month files, keyed by path and stamped with the file's last-write time and
@@ -70,7 +71,7 @@ public sealed class CsvLog
 
     private static TimeBlock Copy(TimeBlock b) => new()
     {
-        Id = b.Id, ProjectId = b.ProjectId, ProjectCode = b.ProjectCode, Asn = b.Asn, ProjectName = b.ProjectName,
+        Id = b.Id, SessionId = b.SessionId, ProjectId = b.ProjectId, ProjectCode = b.ProjectCode, Asn = b.Asn, ProjectName = b.ProjectName,
         StartLocal = b.StartLocal, EndLocal = b.EndLocal, DurationSeconds = b.DurationSeconds,
         Notes = b.Notes, Unscheduled = b.Unscheduled,
     };
@@ -126,6 +127,7 @@ public sealed class CsvLog
             if (end <= start.Date.AddDays(1)) { output.Add(lines[i]); continue; }
 
             bool first = true;
+            var sessionId = f.Count > 12 && !string.IsNullOrEmpty(f[12]) ? f[12] : NewId();
             for (var segStart = start; segStart < end; segStart = segStart.Date.AddDays(1))
             {
                 var segEnd = segStart.Date.AddDays(1) < end ? segStart.Date.AddDays(1) : end;
@@ -135,7 +137,7 @@ public sealed class CsvLog
                     ProjectId = f.Count > 9 ? f[9] : "", ProjectCode = f[1], Asn = f[2], ProjectName = f[3],
                     StartLocal = segStart, EndLocal = segEnd,
                     DurationSeconds = (long)(segEnd - segStart).TotalSeconds,
-                    Notes = f[8], Unscheduled = f.Count > 11 && f[11] == "1",
+                    Notes = f[8], Unscheduled = f.Count > 11 && f[11] == "1", SessionId = sessionId,
                 };
                 first = false;
                 if (_paths.LogFileFor(segStart) == file) output.Add(RowFor(seg)); else elsewhere.Add(seg);
@@ -174,6 +176,7 @@ public sealed class CsvLog
                 ProjectId       = f.Count > 9 ? f[9] : "",
                 Id              = f.Count > 10 && !string.IsNullOrEmpty(f[10]) ? f[10] : LegacyId(f),
                 Unscheduled     = f.Count > 11 && f[11] == "1",
+                SessionId       = f.Count > 12 ? f[12] : "",
             });
         }
         return result;
@@ -199,12 +202,21 @@ public sealed class CsvLog
     }
 
     /// <summary>
-    /// Remove a single recorded block. Matched by <see cref="TimeBlock.Id"/> when the target has
+    /// Remove a recorded block — all of its session's parts if it was split at midnight (see
+    /// <see cref="TimeBlock.SessionId"/>). Matched by <see cref="TimeBlock.Id"/> when the target has
     /// one and the file row does too; otherwise (either side is a legacy row with no id) falls
     /// back to project code + exact start/end timestamps, as before ids existed. Returns true if
     /// a matching row was found and removed.
     /// </summary>
     public bool DeleteBlock(TimeBlock target)
+    {
+        if (string.IsNullOrEmpty(target.SessionId)) return DeleteRow(target);
+        bool any = false;
+        foreach (var part in ReadSessionParts(target)) any |= DeleteRow(part);
+        return any;
+    }
+
+    private bool DeleteRow(TimeBlock target)
     {
         var file = _paths.LogFileFor(target.StartLocal);
         if (!File.Exists(file)) return false;
@@ -275,12 +287,70 @@ public sealed class CsvLog
                 projectId,
                 blockId,
                 updated.Unscheduled ? "1" : "0",
+                f.Count > 12 ? f[12] : "",
             });
             File.WriteAllLines(file, lines);
             Invalidate(file);
             return true;
         }
         return false;
+    }
+
+    /// <summary>Every row of the session <paramref name="part"/> belongs to, in time order — just the
+    /// block itself if it was never split. A session is contiguous, so its parts sit in the month of
+    /// the given part or the one either side.</summary>
+    public List<TimeBlock> ReadSessionParts(TimeBlock part)
+    {
+        if (string.IsNullOrEmpty(part.SessionId)) return new() { part };
+        var parts = new List<TimeBlock>();
+        var month = new DateTime(part.StartLocal.Year, part.StartLocal.Month, 1);
+        for (var m = month.AddMonths(-1); m <= month.AddMonths(1); m = m.AddMonths(1))
+            parts.AddRange(ReadMonth(m.Year, m.Month).Where(b => b.SessionId == part.SessionId));
+        return parts.Count == 0 ? new() { part } : parts.OrderBy(b => b.StartLocal).ToList();
+    }
+
+    /// <summary>One block spanning a whole split session (first part's start to last part's end, notes
+    /// from the first part that has one) for editing it as a unit; the block itself if not split.</summary>
+    public TimeBlock MergedSession(TimeBlock part)
+    {
+        var parts = ReadSessionParts(part);
+        if (parts.Count <= 1) return part;
+        var merged = Copy(parts[0]);
+        merged.EndLocal = parts[^1].EndLocal;
+        merged.DurationSeconds = parts.Sum(p => p.DurationSeconds);
+        merged.Notes = parts.Select(p => p.Notes).FirstOrDefault(n => !string.IsNullOrWhiteSpace(n)) ?? "";
+        return merged;
+    }
+
+    /// <summary>Applies an edit made to a (possibly merged) block to its whole session: the old rows
+    /// are replaced by one row per day of <paramref name="updated"/>'s span, sharing a SessionId when
+    /// there is more than one. A plain single-day block with a single-day result is just
+    /// <see cref="UpdateBlock"/>. Returns true if the original was found.</summary>
+    public bool UpdateSession(TimeBlock original, TimeBlock updated)
+    {
+        var parts = ReadSessionParts(original);
+        bool multi = !updated.Unscheduled && updated.EndLocal > updated.StartLocal.Date.AddDays(1);
+        if (parts.Count <= 1 && !multi) return UpdateBlock(parts[0], updated);
+
+        bool found = false;
+        foreach (var part in parts) found |= DeleteRow(part);
+        if (!found) return false;
+
+        var sessionId = multi ? (parts.Count > 1 ? original.SessionId : NewId()) : "";
+        bool first = true;
+        for (var s = updated.StartLocal; s < updated.EndLocal; s = s.Date.AddDays(1))
+        {
+            var e = multi && s.Date.AddDays(1) < updated.EndLocal ? s.Date.AddDays(1) : updated.EndLocal;
+            var piece = Copy(updated);
+            piece.Id = first ? parts[0].Id : NewId();
+            piece.SessionId = sessionId;
+            piece.StartLocal = s; piece.EndLocal = e;
+            piece.DurationSeconds = Math.Max(0, (long)(e - s).TotalSeconds);
+            Append(piece);
+            first = false;
+            if (!multi) break;
+        }
+        return true;
     }
 
     /// <summary>Sum tracked seconds per project code for a given local date (for "Today").</summary>

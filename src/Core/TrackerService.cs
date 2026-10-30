@@ -70,7 +70,7 @@ public sealed class TrackerService
             if (_state.ActiveProjectId is { } id) Active = FindById(id);
             if (Active is null && _state.ActiveProjectCode is { } code) Active = FindByCode(code);
         }
-        if (Active is null) { _state.ActiveProjectId = null; _state.ActiveProjectCode = null; _state.BlockStartUtc = null; }
+        if (Active is null) { _state.MidnightSessionId = null; _state.ActiveProjectId = null; _state.ActiveProjectCode = null; _state.BlockStartUtc = null; }
     }
 
     // ---------- projects ----------
@@ -258,6 +258,7 @@ public sealed class TrackerService
             var banked = BankCurrent(idleStartUtc, notes);
             if (banked is not null) _pendingNoteBlocks.Add(banked);
         }
+        _state.MidnightSessionId = null; // the idle gap ends the contiguous run of parts
         // Resume fresh from now (BankCurrent cleared start).
         Active = project;
         _state.ActiveProjectId = project.Id;
@@ -291,6 +292,7 @@ public sealed class TrackerService
             }
         }
         _pendingNoteBlocks.Clear();
+        _state.MidnightSessionId = null;
     }
 
     /// <summary>Called once a second by the UI: when the running block has crossed local midnight,
@@ -313,6 +315,7 @@ public sealed class TrackerService
         {
             var midnightUtc = DateTime.SpecifyKind(start.ToLocalTime().Date.AddDays(1), DateTimeKind.Local).ToUniversalTime();
             if (midnightUtc >= uptoUtc) break;
+            _state.MidnightSessionId ??= Guid.NewGuid().ToString("N");
             var banked = BankCurrent(midnightUtc, "");
             if (banked is not null) _pendingNoteBlocks.Add(banked);
             _state.BlockStartUtc = start = midnightUtc;
@@ -340,6 +343,7 @@ public sealed class TrackerService
             EndLocal        = endUtc.ToLocalTime(),
             DurationSeconds = (long)(endUtc - startUtc).TotalSeconds,
             Notes           = notes,
+            SessionId       = _state.MidnightSessionId ?? "",
         };
         _state.BlockStartUtc = null;
         // Skip zero-length noise blocks (e.g. an immediate double switch).

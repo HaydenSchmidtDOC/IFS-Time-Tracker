@@ -142,6 +142,8 @@ public class TrackerServiceTests : IDisposable
         Assert.Equal(3600, blocks[0].DurationSeconds);
         Assert.Equal(7200, blocks[1].DurationSeconds);
         Assert.All(blocks, b => Assert.Equal("overnight run", b.Notes));
+        Assert.False(string.IsNullOrEmpty(blocks[0].SessionId));
+        Assert.Equal(blocks[0].SessionId, blocks[1].SessionId);
     }
 
     [Fact]
@@ -378,6 +380,50 @@ public class MidnightMigrationTests : IDisposable
         Assert.All(blocks, b => Assert.True(b.EndLocal <= b.StartLocal.Date.AddDays(1)));
         Assert.True(File.Exists(_paths.LogFileFor(new DateTime(2026, 7, 1)) + ".pre-split.bak"));
         Assert.Equal(4, new CsvLog(_paths).ReadMonth(2026, 7).Count); // re-read: no further change
+    }
+
+    [Fact]
+    public void SplitParts_ShareSessionId_AndEditingTreatsThemAsOne()
+    {
+        _log.Append(B(new DateTime(2026, 7, 21, 22, 0, 0), new DateTime(2026, 7, 22, 1, 0, 0), "late"));
+        var parts = _log.ReadMonth(2026, 7).OrderBy(b => b.StartLocal).ToList();
+        Assert.Equal(2, parts.Count);
+        Assert.False(string.IsNullOrEmpty(parts[0].SessionId));
+        Assert.Equal(parts[0].SessionId, parts[1].SessionId);
+        Assert.NotEqual(parts[0].Id, parts[1].Id);
+
+        var merged = _log.MergedSession(parts[1]);   // editing from either half
+        Assert.Equal(new DateTime(2026, 7, 21, 22, 0, 0), merged.StartLocal);
+        Assert.Equal(new DateTime(2026, 7, 22, 1, 0, 0), merged.EndLocal);
+        Assert.Equal(10800, merged.DurationSeconds);
+
+        // extend the end to 02:30 and change the note: both days update, still one session
+        merged.EndLocal = new DateTime(2026, 7, 22, 2, 30, 0);
+        merged.DurationSeconds = (long)(merged.EndLocal - merged.StartLocal).TotalSeconds;
+        merged.Notes = "edited";
+        Assert.True(_log.UpdateSession(parts[1], merged));
+        var after = _log.ReadMonth(2026, 7).OrderBy(b => b.StartLocal).ToList();
+        Assert.Equal(new[] { 7200L, 9000L }, after.Select(b => b.DurationSeconds).ToArray());
+        Assert.All(after, b => Assert.Equal("edited", b.Notes));
+        Assert.Equal(after[0].SessionId, after[1].SessionId);
+
+        // pull it back inside one day: collapses to an ordinary single block
+        merged = _log.MergedSession(after[0]);
+        merged.EndLocal = new DateTime(2026, 7, 21, 23, 30, 0);
+        Assert.True(_log.UpdateSession(after[0], merged));
+        var single = Assert.Single(_log.ReadMonth(2026, 7));
+        Assert.Equal("", single.SessionId);
+        Assert.Equal(5400, single.DurationSeconds);
+    }
+
+    [Fact]
+    public void DeletingOnePart_DeletesTheWholeSession()
+    {
+        _log.Append(B(new DateTime(2026, 7, 21, 22, 0, 0), new DateTime(2026, 7, 22, 1, 0, 0)));
+        _log.Append(B(new DateTime(2026, 7, 25, 9, 0, 0), new DateTime(2026, 7, 25, 10, 0, 0)));
+        var parts = _log.ReadMonth(2026, 7).OrderBy(b => b.StartLocal).ToList();
+        Assert.True(_log.DeleteBlock(parts[1]));
+        Assert.Single(_log.ReadMonth(2026, 7));
     }
 
     [Fact]

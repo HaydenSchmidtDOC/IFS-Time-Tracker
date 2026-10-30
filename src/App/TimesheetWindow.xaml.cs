@@ -1771,7 +1771,7 @@ public partial class TimesheetWindow : Window
                 // continuous session spanning midnight without a stop/switch) just aren't
                 // draggable; isLive's exclusion below covers the mirror case (starts before
                 // today, only possible for the synthetic live block).
-                bool spansMidnight = b.EndLocal.Date > day;
+                bool spansMidnight = b.EndLocal.Date > day || !string.IsNullOrEmpty(b.SessionId);
                 // Clamp to this column's own midnight-to-midnight span — a block that started
                 // before this day (only possible for the synthetic live block, force-bucketed
                 // under "today" even if it actually started yesterday) or that runs past this
@@ -2152,7 +2152,7 @@ public partial class TimesheetWindow : Window
         // Same eligibility rule as "draggable" above (isLive / spansMidnight), reusable for a
         // NEIGHBOUR found via the full (not draggable-only) block list — a non-draggable
         // neighbour is a hard stop rather than something to push along.
-        bool IsDraggableBlock(TimeBlock nb, DateTime day) => !ReferenceEquals(nb, liveBlock) && nb.EndLocal.Date <= day;
+        bool IsDraggableBlock(TimeBlock nb, DateTime day) => !ReferenceEquals(nb, liveBlock) && nb.EndLocal.Date <= day && string.IsNullOrEmpty(nb.SessionId);
 
         void BeginResize(MouseButtonEventArgs e, Border grip, bool top, TimeBlock block, Border element,
             DateTime day, List<(TimeBlock Block, Border Element)> dayBlocks)
