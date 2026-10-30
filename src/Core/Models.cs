@@ -55,11 +55,6 @@ public sealed class TimeBlock
     /// </summary>
     public string ProjectId { get; set; } = "";
 
-    /// <summary>Shared by the rows one continuous session was cut into at midnight (empty for an
-    /// ordinary block). Each row keeps its own <see cref="Id"/>; this ties them together so editing
-    /// or deleting any part treats the whole session as one — see CsvLog.MergedSession.</summary>
-    public string SessionId { get; set; } = "";
-
     public string ProjectCode { get; set; } = "";
     public string Asn { get; set; } = "";
     public string ProjectName { get; set; } = "";
@@ -76,6 +71,14 @@ public sealed class TimeBlock
     /// real position and should be treated as "just a total for the day," not a time slot.
     /// </summary>
     public bool Unscheduled { get; set; }
+
+    /// <summary>
+    /// Set only on a per-day slice of a row that crosses midnight (see CsvLog.ReadRange): the
+    /// stored row the slice was cut from. Edits and deletes resolve to this, so a session that
+    /// runs across midnight is still one row on disk and one unit to the user.
+    /// </summary>
+    [JsonIgnore]
+    public TimeBlock? Whole { get; set; }
 
     /// <summary>Elapsed hours rounded to 0.1 h (nearest 6 minutes) for IFS export.</summary>
     [JsonIgnore]
@@ -94,10 +97,6 @@ public sealed class TrackerState
     /// back to this only for a state.json saved before ids existed.
     /// </summary>
     public string? ActiveProjectCode { get; set; }
-
-    /// <summary>SessionId stamped on every part of the running session once it has crossed local midnight
-    /// (see TimeBlock.SessionId); null until then. Kept here so it survives an app restart.</summary>
-    public string? MidnightSessionId { get; set; }
 
     /// <summary>UTC start of the current running block, or null if stopped.</summary>
     public DateTime? BlockStartUtc { get; set; }

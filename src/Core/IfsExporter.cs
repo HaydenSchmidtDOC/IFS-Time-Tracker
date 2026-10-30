@@ -22,7 +22,7 @@ public sealed class IfsExporter
     /// <summary>Write the mapped export for a month and return the file path.</summary>
     public string ExportMonth(int year, int month, Settings settings)
     {
-        var blocks = _log.ReadMonth(year, month);
+        var blocks = _log.ReadMonthSlices(year, month);
         var outFile = _paths.ExportFileFor(year, month);
         var mapping = settings.IfsExportMapping;
 

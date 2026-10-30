@@ -1749,13 +1749,13 @@ public partial class TimesheetWindow : Window
             }
 
             // ALL of the day's rendered blocks (draggable or not — including the live block and
-            // any rare block that spans past midnight, see spansMidnight below), so neighbour/
+            // the live block), so neighbour/
             // collision lookups always see the true immediate neighbour even when it happens to
             // be one of those non-draggable ones. draggableDayBlockElements is the subset that
             // actually gets a move handler (and, per HasGrips, resize grips too) wired up in the
             // second pass further down.
             var allDayBlockElements = new List<(TimeBlock Block, Border Element)>();
-            var draggableDayBlockElements = new List<(TimeBlock Block, Border Element, bool HasGrips)>();
+            var draggableDayBlockElements = new List<(TimeBlock Block, Border Element, Border? TopGrip, Border? BotGrip)>();
 
             foreach (var b in byDay[day])
             {
@@ -1771,7 +1771,6 @@ public partial class TimesheetWindow : Window
                 // continuous session spanning midnight without a stop/switch) just aren't
                 // draggable; isLive's exclusion below covers the mirror case (starts before
                 // today, only possible for the synthetic live block).
-                bool spansMidnight = b.EndLocal.Date > day || !string.IsNullOrEmpty(b.SessionId);
                 // Clamp to this column's own midnight-to-midnight span — a block that started
                 // before this day (only possible for the synthetic live block, force-bucketed
                 // under "today" even if it actually started yesterday) or that runs past this
@@ -1786,9 +1785,14 @@ public partial class TimesheetWindow : Window
                 var baseColor = resolved is not null ? ColorUtil.Parse(resolved.Color) : ((SolidColorBrush)faintBrush).Color;
                 var fill = new SolidColorBrush(baseColor);
 
+                // A slice of a midnight-crossing row shows the whole row's span.
+                var whole = b.Whole ?? b;
+                string span = whole.EndLocal.Date > whole.StartLocal.Date
+                    ? $"{whole.StartLocal:MMM d HH:mm}–{whole.EndLocal:MMM d HH:mm}"
+                    : $"{b.StartLocal:HH:mm}–{b.EndLocal:HH:mm}";
                 string tooltip = resolved is not null
-                    ? $"{resolved.Code} · ASN {resolved.Asn} · {b.StartLocal:HH:mm}–{b.EndLocal:HH:mm}" + (isLive ? " · recording now" : "")
-                    : $"{b.ProjectCode} · {b.StartLocal:HH:mm}–{b.EndLocal:HH:mm}";
+                    ? $"{resolved.Code} · ASN {resolved.Asn} · {span}" + (isLive ? " · recording now" : "")
+                    : $"{b.ProjectCode} · {span}";
                 if (!string.IsNullOrWhiteSpace(b.Notes)) tooltip += $"\nNote: {b.Notes}";
 
                 var block = new Border
@@ -1881,7 +1885,7 @@ public partial class TimesheetWindow : Window
                     content.Children.Add(deleteBtn);
                 }
 
-                bool draggable = !isLive && !spansMidnight;
+                bool draggable = !isLive;
                 bool showGrips = draggable && segH >= MinHeightForGrips;
                 Border? topGrip = null, botGrip = null;
                 // Non-draggable blocks (live, or the rare one spanning past midnight) still get
@@ -1899,15 +1903,20 @@ public partial class TimesheetWindow : Window
 
                 if (showGrips)
                 {
+                    // Only the outer edges of a midnight-crossing row resize it: the first
+                    // slice's top and the last slice's bottom (the cut at midnight isn't an edge).
                     double gripH = Math.Clamp(segH * 0.25, 4, 8);
-                    topGrip = BuildDragGrip(top: true, gripH);
-                    botGrip = BuildDragGrip(top: false, gripH);
-                    content.Children.Add(topGrip);
-                    content.Children.Add(botGrip);
-                    if (alreadyHovered)
+                    if (b.Whole is null || b.StartLocal == b.Whole.StartLocal)
                     {
-                        ((Border)topGrip.Child).Opacity = 0.85;
-                        ((Border)botGrip.Child).Opacity = 0.85;
+                        topGrip = BuildDragGrip(top: true, gripH);
+                        content.Children.Add(topGrip);
+                        if (alreadyHovered) ((Border)topGrip.Child).Opacity = 0.85;
+                    }
+                    if (b.Whole is null || b.EndLocal == b.Whole.EndLocal)
+                    {
+                        botGrip = BuildDragGrip(top: false, gripH);
+                        content.Children.Add(botGrip);
+                        if (alreadyHovered) ((Border)botGrip.Child).Opacity = 0.85;
                     }
                 }
                 if (deleteBtn is not null && alreadyHovered) deleteBtn.Opacity = 0.8;
@@ -1918,7 +1927,7 @@ public partial class TimesheetWindow : Window
                 Canvas.SetTop(block, top);
                 canvas.Children.Add(block);
                 allDayBlockElements.Add((b, block));
-                if (draggable) draggableDayBlockElements.Add((b, block, showGrips));
+                if (draggable) draggableDayBlockElements.Add((b, block, topGrip, botGrip));
                 if (isLive)
                 {
                     _liveTickBlockElement = block;
@@ -1927,7 +1936,7 @@ public partial class TimesheetWindow : Window
                     _liveTickBlockLabeled = segH >= 16 && resolved is not null;
                 }
 
-                if (topGrip is not null && botGrip is not null)
+                if (topGrip is not null || botGrip is not null)
                     WireGripHoverFade(block, topGrip, botGrip);
                 if (deleteBtn is not null)
                 {
@@ -1951,43 +1960,17 @@ public partial class TimesheetWindow : Window
             // once here and handed to every Begin* call for the day, rather than each closure
             // re-sorting its own copy.
             var sortedAllDayBlocks = allDayBlockElements.OrderBy(x => x.Block.StartLocal).ToList();
-            foreach (var (b, element, hasGrips) in draggableDayBlockElements)
+            foreach (var (b, element, topGrip, botGrip) in draggableDayBlockElements)
             {
                 var capturedDay = day;
                 var capturedBlock = b;
                 var capturedElement = element;
 
-                if (hasGrips)
-                {
-                    var grid = (Grid)element.Child;
-                    // Children order from above: [labels?], topGrip, botGrip — grips are always
-                    // the last two when present (hasGrips is exactly the condition that added them).
-                    var botGrip = (Border)grid.Children[grid.Children.Count - 1];
-                    var topGrip = (Border)grid.Children[grid.Children.Count - 2];
+                if (topGrip is not null)
                     topGrip.MouseLeftButtonDown += (_, e) => BeginResize(e, topGrip, top: true, capturedBlock, capturedElement, capturedDay, sortedAllDayBlocks);
+                if (botGrip is not null)
                     botGrip.MouseLeftButtonDown += (_, e) => BeginResize(e, botGrip, top: false, capturedBlock, capturedElement, capturedDay, sortedAllDayBlocks);
-                }
                 element.MouseLeftButtonDown += (_, e) => BeginMove(e, capturedElement, capturedBlock, capturedDay);
-            }
-
-            // Blocks that can't be dragged (a session split at midnight, or one spanning it) still open
-            // the editor on a plain click; the press is swallowed so it doesn't start a drag-to-add.
-            foreach (var (b, element) in allDayBlockElements)
-            {
-                if (ReferenceEquals(b, liveBlock) || draggableDayBlockElements.Any(x => ReferenceEquals(x.Element, element))) continue;
-                var capturedBlock = b;
-                bool pressed = false;
-                element.Cursor = Cursors.Hand;
-                element.MouseLeftButtonDown += (_, e) => { pressed = true; e.Handled = true; };
-                element.MouseLeftButtonUp += (_, e) =>
-                {
-                    if (!pressed) return;
-                    pressed = false;
-                    e.Handled = true;
-                    bool changed = ShowTimeDialog(() => AddTimeDialog.AskEdit(this, capturedBlock));
-                    if (changed) _cachedWeekStart = null;
-                    RenderCurrentWeek(0);
-                };
             }
 
             var labelStack = new StackPanel
@@ -2097,10 +2080,10 @@ public partial class TimesheetWindow : Window
             },
         };
 
-        void WireGripHoverFade(Border block, Border topGrip, Border botGrip)
+        void WireGripHoverFade(Border block, Border? topGrip, Border? botGrip)
         {
-            void Fade(Border grip, double to) =>
-                ((Border)grip.Child).BeginAnimation(OpacityProperty, new DoubleAnimation(to, TimeSpan.FromMilliseconds(140))
+            void Fade(Border? grip, double to) =>
+                ((Border?)grip?.Child)?.BeginAnimation(OpacityProperty, new DoubleAnimation(to, TimeSpan.FromMilliseconds(140))
                 { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
             block.MouseEnter += (_, _) => { Fade(topGrip, 0.85); Fade(botGrip, 0.85); };
             // Guarded: mid-drag the cursor can end up outside the (now resized) block's bounds —
@@ -2158,21 +2141,25 @@ public partial class TimesheetWindow : Window
         // written even if some edge case in that clamp math is wrong. `except`/`alsoExcept` let
         // the dragged block and (for a resize) its pushed neighbour skip checking against
         // themselves/each other, since both their positions are simultaneously changing.
-        bool OverlapsAnyOtherBlock(DateTime day, TimeBlock self, DateTime newStart, DateTime newEnd, TimeBlock? alsoExcept)
+        bool OverlapsAnyOtherBlock(DateTime newStart, DateTime newEnd, TimeBlock self, TimeBlock? alsoExcept)
         {
-            if (!byDay.TryGetValue(day, out var blocks)) return false;
-            foreach (var other in blocks)
+            // Checked against what's on disk across every day the span touches (a row can cross
+            // midnight), skipping the rows being rewritten by their stored id.
+            var selfId = (self.Whole ?? self).Id;
+            var otherId = alsoExcept is null ? null : (alsoExcept.Whole ?? alsoExcept).Id;
+            var lastDay = newEnd.TimeOfDay == TimeSpan.Zero ? newEnd.Date.AddDays(-1) : newEnd.Date;
+            foreach (var other in A.Log.ReadRange(newStart.Date, lastDay < newStart.Date ? newStart.Date : lastDay))
             {
-                if (ReferenceEquals(other, self) || ReferenceEquals(other, alsoExcept)) continue;
+                if (other.Unscheduled || other.Id == selfId || (otherId is not null && other.Id == otherId)) continue;
                 if (newStart < other.EndLocal && newEnd > other.StartLocal) return true;
             }
-            return false;
+            return liveBlock is not null && !ReferenceEquals(self, liveBlock)
+                && newStart < liveBlock.EndLocal && newEnd > liveBlock.StartLocal;
         }
 
-        // Same eligibility rule as "draggable" above (isLive / spansMidnight), reusable for a
-        // NEIGHBOUR found via the full (not draggable-only) block list — a non-draggable
-        // neighbour is a hard stop rather than something to push along.
-        bool IsDraggableBlock(TimeBlock nb, DateTime day) => !ReferenceEquals(nb, liveBlock) && nb.EndLocal.Date <= day && string.IsNullOrEmpty(nb.SessionId);
+        // Only the live block is a hard stop for a resize's neighbour lookup; a midnight-crossing
+        // slice is pushed like any other (its real edge is on the parent row).
+        bool IsDraggableBlock(TimeBlock nb, DateTime day) => !ReferenceEquals(nb, liveBlock);
 
         void BeginResize(MouseButtonEventArgs e, Border grip, bool top, TimeBlock block, Border element,
             DateTime day, List<(TimeBlock Block, Border Element)> dayBlocks)
@@ -2249,6 +2236,9 @@ public partial class TimesheetWindow : Window
             // a resize already relies on — nothing is written to disk if it doesn't clear that.
             double low = 0;
             double high = gridHeight - origHeight;
+            // A slice of a midnight-crossing row moves the whole row, so it may slide partly off
+            // its own day (the other half grows); the real result is computed at MouseUp.
+            if (block.Whole is not null) { low = MinBlockPx - origHeight; high = gridHeight - MinBlockPx; }
             if (low > high) low = high;
 
             _drag = new DragState
@@ -2417,38 +2407,59 @@ public partial class TimesheetWindow : Window
 
             double finalTop = Canvas.GetTop(d.Element);
             double finalHeight = d.Element.Height;
-            // CurrentDay for a resize is always just Day (MouseMove never touches it in that
-            // branch) — this only actually differs from Day for a move that's crossed columns.
-            var newStart = d.CurrentDay + TimeSpan.FromMinutes(YToMinutes(finalTop));
-            var newEnd = d.CurrentDay + TimeSpan.FromMinutes(YToMinutes(finalTop + finalHeight));
+            var row = d.Block.Whole ?? d.Block;
+            int snapMin = Math.Max(1, A.Settings.DragSnapMinutes);
+            DateTime newStart, newEnd;
+            if (d.IsResize)
+            {
+                // Only the edge being dragged changes; the other keeps its exact stored value.
+                newStart = d.ResizeTop ? d.Day + TimeSpan.FromMinutes(YToMinutes(finalTop)) : row.StartLocal;
+                newEnd = d.ResizeTop ? row.EndLocal : d.Day + TimeSpan.FromMinutes(YToMinutes(finalTop + finalHeight));
+            }
+            else if (d.Block.Whole is not null)
+            {
+                // Whole-row shift: slide the stored row by the drag distance (and any day change),
+                // snapped so its start lands on the grid; each day's slice re-derives from that.
+                var raw = row.StartLocal + (d.CurrentDay - d.Day) + TimeSpan.FromMinutes(YToMinutes(upPos.Y - d.StartMouseY));
+                newStart = raw.Date + TimeSpan.FromMinutes(SnapTo(raw.TimeOfDay.TotalMinutes, snapMin));
+                newEnd = row.EndLocal + (newStart - row.StartLocal);
+            }
+            else
+            {
+                newStart = d.CurrentDay + TimeSpan.FromMinutes(YToMinutes(finalTop));
+                newEnd = d.CurrentDay + TimeSpan.FromMinutes(YToMinutes(finalTop + finalHeight));
+            }
 
             DateTime? neighborNewStart = null, neighborNewEnd = null;
             bool neighborChanged = false;
-            if (d.NeighborElement is not null)
+            TimeBlock? nRow = d.Neighbor is null ? null : d.Neighbor.Whole ?? d.Neighbor;
+            if (d.NeighborElement is not null && nRow is not null)
             {
                 double nTop = Canvas.GetTop(d.NeighborElement);
                 double nHeight = d.NeighborElement.Height;
                 // Exact equality is fine here (not a fragile float comparison) — the "not
                 // encroaching" branch above assigns these back from NeighborOrigTop/Height
                 // verbatim, not via any recomputation that could round differently.
-                neighborChanged = nTop != d.NeighborOrigTop || nHeight != d.NeighborOrigHeight;
-                neighborNewStart = d.Day + TimeSpan.FromMinutes(YToMinutes(nTop));
-                neighborNewEnd = d.Day + TimeSpan.FromMinutes(YToMinutes(nTop + nHeight));
+                bool topMoved = nTop != d.NeighborOrigTop;
+                bool botMoved = nTop + nHeight != d.NeighborOrigTop + d.NeighborOrigHeight;
+                neighborChanged = topMoved || botMoved;
+                neighborNewStart = topMoved ? d.Day + TimeSpan.FromMinutes(YToMinutes(nTop)) : nRow.StartLocal;
+                neighborNewEnd = botMoved ? d.Day + TimeSpan.FromMinutes(YToMinutes(nTop + nHeight)) : nRow.EndLocal;
             }
 
             // A cross-MONTH move isn't supported — CsvLog.UpdateBlock rewrites the row in place in
-            // the file its ORIGINAL date belongs to, so a new date has to stay within that same
+            // the file its ORIGINAL date belongs to, so the new start has to stay within that same
             // file/month (see its remarks). Within the same month, a cross-DAY move is just a
             // normal rewrite with a different date, no different from changing its time-of-day.
-            bool crossMonth = d.CurrentDay.Year != d.Day.Year || d.CurrentDay.Month != d.Day.Month;
+            bool crossMonth = newStart.Year != row.StartLocal.Year || newStart.Month != row.StartLocal.Month;
 
-            bool ok = !crossMonth
-                && !OverlapsAnyOtherBlock(d.CurrentDay, d.Block, newStart, newEnd, d.Neighbor)
-                && (!neighborChanged || !OverlapsAnyOtherBlock(d.Day, d.Neighbor!, neighborNewStart!.Value, neighborNewEnd!.Value, d.Block));
+            bool ok = !crossMonth && newEnd > newStart
+                && !OverlapsAnyOtherBlock(newStart, newEnd, d.Block, d.Neighbor)
+                && (!neighborChanged || !OverlapsAnyOtherBlock(neighborNewStart!.Value, neighborNewEnd!.Value, d.Neighbor!, d.Block));
 
             if (ok)
             {
-                var updated = new TimeBlock { StartLocal = newStart, EndLocal = newEnd, Notes = d.Block.Notes, Unscheduled = d.Block.Unscheduled };
+                var updated = new TimeBlock { StartLocal = newStart, EndLocal = newEnd, Notes = row.Notes, Unscheduled = row.Unscheduled };
                 A.Log.UpdateBlock(d.Block, updated);
 
                 // Only touch the neighbour's row if it was actually pushed — never encroaching
@@ -2456,7 +2467,7 @@ public partial class TimesheetWindow : Window
                 // recorded, so there's nothing to rewrite.
                 if (neighborChanged && d.Neighbor is not null)
                 {
-                    var nUpdated = new TimeBlock { StartLocal = neighborNewStart!.Value, EndLocal = neighborNewEnd!.Value, Notes = d.Neighbor.Notes, Unscheduled = d.Neighbor.Unscheduled };
+                    var nUpdated = new TimeBlock { StartLocal = neighborNewStart!.Value, EndLocal = neighborNewEnd!.Value, Notes = nRow!.Notes, Unscheduled = nRow.Unscheduled };
                     A.Log.UpdateBlock(d.Neighbor, nUpdated);
                 }
             }

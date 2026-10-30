@@ -70,7 +70,7 @@ public sealed class TrackerService
             if (_state.ActiveProjectId is { } id) Active = FindById(id);
             if (Active is null && _state.ActiveProjectCode is { } code) Active = FindByCode(code);
         }
-        if (Active is null) { _state.MidnightSessionId = null; _state.ActiveProjectId = null; _state.ActiveProjectCode = null; _state.BlockStartUtc = null; }
+        if (Active is null) { _state.ActiveProjectId = null; _state.ActiveProjectCode = null; _state.BlockStartUtc = null; }
     }
 
     // ---------- projects ----------
@@ -251,14 +251,12 @@ public sealed class TrackerService
     {
         if (!IsRunning || Active is null) return;
         var project = Active;
-        SplitAtMidnights(idleStartUtc);
         // Only truncate if the idle start is within the current block.
         if (_state.BlockStartUtc is DateTime start && idleStartUtc > start)
         {
             var banked = BankCurrent(idleStartUtc, notes);
             if (banked is not null) _pendingNoteBlocks.Add(banked);
         }
-        _state.MidnightSessionId = null; // the idle gap ends the contiguous run of parts
         // Resume fresh from now (BankCurrent cleared start).
         Active = project;
         _state.ActiveProjectId = project.Id;
@@ -277,7 +275,6 @@ public sealed class TrackerService
     /// resolved one way or the other and mustn't leak into whatever gets tracked next.</summary>
     private void FinishCurrentBlock(DateTime endUtc, string notes)
     {
-        SplitAtMidnights(endUtc);
         BankCurrent(endUtc, notes);
         if (!string.IsNullOrWhiteSpace(notes))
         {
@@ -292,36 +289,6 @@ public sealed class TrackerService
             }
         }
         _pendingNoteBlocks.Clear();
-        _state.MidnightSessionId = null;
-    }
-
-    /// <summary>Called once a second by the UI: when the running block has crossed local midnight,
-    /// banks the part before midnight and carries on with a fresh block from 00:00 — so every log
-    /// row (and the cost/time totals built on it) belongs to exactly one day. The banked halves are
-    /// linked like idle-discard splits, so the note typed when the session finally ends lands on all
-    /// of them.</summary>
-    public void RollOverMidnight()
-    {
-        if (SplitAtMidnights(_utcNow())) { _store.SaveState(_state); Changed?.Invoke(); }
-    }
-
-    /// <summary>Banks the running block at each local midnight falling strictly between its start and
-    /// <paramref name="uptoUtc"/>, restarting it at that midnight. Returns true if it split anything.</summary>
-    private bool SplitAtMidnights(DateTime uptoUtc)
-    {
-        if (Active is null || _state.BlockStartUtc is not DateTime start) return false;
-        bool split = false;
-        while (true)
-        {
-            var midnightUtc = DateTime.SpecifyKind(start.ToLocalTime().Date.AddDays(1), DateTimeKind.Local).ToUniversalTime();
-            if (midnightUtc >= uptoUtc) break;
-            _state.MidnightSessionId ??= Guid.NewGuid().ToString("N");
-            var banked = BankCurrent(midnightUtc, "");
-            if (banked is not null) _pendingNoteBlocks.Add(banked);
-            _state.BlockStartUtc = start = midnightUtc;
-            split = true;
-        }
-        return split;
     }
 
     /// <summary>Append the current block to the log, ending at <paramref name="endUtc"/>. Returns
@@ -343,7 +310,6 @@ public sealed class TrackerService
             EndLocal        = endUtc.ToLocalTime(),
             DurationSeconds = (long)(endUtc - startUtc).TotalSeconds,
             Notes           = notes,
-            SessionId       = _state.MidnightSessionId ?? "",
         };
         _state.BlockStartUtc = null;
         // Skip zero-length noise blocks (e.g. an immediate double switch).
@@ -372,7 +338,9 @@ public sealed class TrackerService
         if (IsRunning && Active is not null)
         {
             totals.TryGetValue(Active.Code, out var cur);
-            totals[Active.Code] = cur + CurrentElapsedSeconds;
+            // Only the part of a live block that falls on today (it may have started before midnight).
+            var sinceMidnight = (long)(now - now.Date).TotalSeconds;
+            totals[Active.Code] = cur + Math.Min(CurrentElapsedSeconds, sinceMidnight);
         }
         return totals;
     }

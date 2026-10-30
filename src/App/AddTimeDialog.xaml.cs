@@ -86,7 +86,7 @@ public partial class AddTimeDialog : Window
         var start = prefillStart ?? DefaultStartTime();
         var end = prefillEnd ?? SmartDefaultEnd(start);
         StartTimeBox.Text = Fmt(start);
-        EndTimeBox.Text = Fmt(end);
+        EndTimeBox.Text = FmtEnd(end);
         // Wired AFTER the initial Text assignments above so the dialog's own starting values
         // never mark the end as "manually edited" — only the user actually typing does that.
         // Only meaningful for a fresh add: correcting an existing block's recorded times (see
@@ -176,25 +176,13 @@ public partial class AddTimeDialog : Window
     /// calendar view's click-to-edit. Returns true if the block was changed.</summary>
     public static bool AskEdit(Window owner, TimeBlock block)
     {
-        // A session cut at midnight is edited (and deleted) as the one session it really was.
-        block = A.Log.MergedSession(block);
+        // A slice of a midnight-crossing row edits the whole stored row (start of the first day to
+        // end of the last), with the end shown as e.g. "01:30 +1d".
+        block = block.Whole ?? block;
         var project = A.Tracker.FindByBlock(block);
         var d = new AddTimeDialog(block.StartLocal.Date, initialMode: block.Unscheduled ? 0 : 1,
-            block.StartLocal.TimeOfDay, block.EndLocal.TimeOfDay, editingBlock: block, preselectProject: project)
+            block.StartLocal.TimeOfDay, block.EndLocal - block.StartLocal.Date, editingBlock: block, preselectProject: project)
         { Owner = owner };
-        if (!block.Unscheduled)
-        {
-            // End time-of-day is relative to the start day: "+1d" marks an end on a later day, and a
-            // block ending exactly at midnight reads 24:00 rather than 00:00.
-            var total = block.EndLocal - block.StartLocal.Date;
-            int days = Math.Max(0, (int)Math.Ceiling(total.TotalDays) - 1);
-            d.EndTimeBox.Text = Fmt(total - TimeSpan.FromDays(days)) + (days > 0 ? $" +{days}d" : "");
-            if (days > 0)
-            {
-                d.TimesHintText.Text = "This session runs past midnight and is edited as one. Use \"+1d\" after the end time for the day it ends on.";
-                d.TimesHintText.Visibility = Visibility.Visible;
-            }
-        }
         d.ShowDialog();
         return d.Commit();
     }
@@ -211,6 +199,33 @@ public partial class AddTimeDialog : Window
     }
 
     private static string Fmt(TimeSpan t) => $"{(int)t.TotalHours:00}:{t.Minutes:00}";
+
+    /// <summary>End-time text: plain "HH:mm" within the day, "24:00" for exactly midnight, and
+    /// "HH:mm +Nd" when the end falls on a later day.</summary>
+    private static string FmtEnd(TimeSpan t)
+    {
+        if (t <= TimeSpan.FromHours(24)) return Fmt(t);
+        int days = (int)(t.TotalHours / 24);
+        var tod = t - TimeSpan.FromDays(days);
+        return tod == TimeSpan.Zero ? $"24:00 +{days - 1}d" : $"{Fmt(tod)} +{days}d";
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex EndRx =
+        new(@"^\s*(\d{1,2}):(\d{2})\s*(?:\+\s*(\d+)\s*d)?\s*$", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>Parses an end time as an offset from the start day's midnight: "17:30", "24:00",
+    /// or "01:30 +1d".</summary>
+    private static bool TryParseEnd(string text, out TimeSpan end)
+    {
+        end = default;
+        var m = EndRx.Match(text);
+        if (!m.Success) return false;
+        int h = int.Parse(m.Groups[1].Value), mi = int.Parse(m.Groups[2].Value);
+        int days = m.Groups[3].Success ? int.Parse(m.Groups[3].Value) : 0;
+        if (mi > 59 || days > 7 || h > 24 || (h == 24 && mi != 0)) return false;
+        end = new TimeSpan(days, h, mi, 0);
+        return true;
+    }
 
     private void RefreshDayText()
     {
@@ -350,17 +365,15 @@ public partial class AddTimeDialog : Window
     /// Static (not just an instance method reading _day/_editingBlock) so the calendar view's
     /// drag-to-add gesture can pre-clip a raw drag span — see ClipDragToEdges — against the SAME
     /// data before a dialog instance even exists yet.</summary>
-    /// <summary>Same row, or another part of the same split session (edited together as one).</summary>
-    private static bool SameBlock(TimeBlock b, TimeBlock edited)
-        => b.Id == edited.Id || (edited.SessionId != "" && b.SessionId == edited.SessionId);
-
-    private static List<(DateTime Start, DateTime End)> OccupiedRangesFor(DateTime day, TimeBlock? excluding)
+    private static List<(DateTime Start, DateTime End)> OccupiedRangesFor(DateTime day, TimeBlock? excluding, DateTime? lastDay = null)
     {
-        var ranges = A.Log.ReadRange(day, day)
-            .Where(b => b.StartLocal.Date == day && !b.Unscheduled && (excluding is null || !SameBlock(b, excluding)))
+        // Per-day slices, so a row crossing midnight occupies the right part of each day.
+        var ranges = A.Log.ReadRange(day, lastDay ?? day)
+            .Where(b => !b.Unscheduled && (excluding is null || b.Id != excluding.Id))
             .Select(b => (Start: TruncateToMinute(b.StartLocal), End: TruncateToMinute(b.EndLocal)))
             .ToList();
-        if (day == DateTime.Today && LiveSessionStart() is DateTime liveStart)
+        if (LiveSessionStart() is DateTime liveStart && liveStart.Date >= day && liveStart.Date <= (lastDay ?? day).Date
+            && DateTime.Today >= day && DateTime.Today <= (lastDay ?? day).Date)
             ranges.Add((TruncateToMinute(liveStart), TruncateToMinute(DateTime.Now)));
         ranges.Sort((a, b) => a.Start.CompareTo(b.Start));
         return ranges;
@@ -489,23 +502,6 @@ public partial class AddTimeDialog : Window
     /// it only PARTIALLY overlaps is still a hard error, same as always. Also rejects a span
     /// that, once split, would leave nothing to add at all (it exactly matches existing
     /// block(s)).</summary>
-    /// <summary>Parses "HH:mm" (00:00 &lt; t ≤ 24:00), plus — only while editing, where a session may run
-    /// past midnight — an optional "+Nd" suffix naming a later end day.</summary>
-    private static bool TryParseEnd(string text, bool allowDayOffset, out TimeSpan time, out int days)
-    {
-        time = default; days = 0;
-        var m = System.Text.RegularExpressions.Regex.Match(text ?? "", @"^\s*(\d{1,2}):(\d{2})\s*(?:\+\s*(\d+)\s*d?)?\s*$");
-        if (!m.Success) return false;
-        int h = int.Parse(m.Groups[1].Value), min = int.Parse(m.Groups[2].Value);
-        if (h > 24 || min > 59 || (h == 24 && min != 0)) return false;
-        if (m.Groups[3].Success)
-        {
-            if (!allowDayOffset || !int.TryParse(m.Groups[3].Value, out days) || days > 31) return false;
-        }
-        time = new TimeSpan(h, min, 0);
-        return days > 0 || time > TimeSpan.Zero;
-    }
-
     private bool TryParseTimesMode(out DateTime start, out DateTime end,
         out List<(DateTime Start, DateTime End)> segments, out string? error)
     {
@@ -513,18 +509,17 @@ public partial class AddTimeDialog : Window
         segments = new();
         if (!TimeSpan.TryParse(StartTimeBox.Text, CultureInfo.InvariantCulture, out var ts) || ts < TimeSpan.Zero || ts >= TimeSpan.FromHours(24))
         { error = "Enter a valid start time, e.g. 09:00."; return false; }
-        if (!TryParseEnd(EndTimeBox.Text, _editingBlock is not null, out var te, out var endDays))
-        { error = "Enter a valid end time, e.g. 17:30."; return false; }
+        if (!TryParseEnd(EndTimeBox.Text, out var te) || te <= TimeSpan.Zero
+            || (_editingBlock is null && (te > TimeSpan.FromHours(24))))
+        { error = _editingBlock is null ? "Enter a valid end time, e.g. 17:30." : "Enter a valid end time, e.g. 17:30 or 01:30 +1d."; return false; }
 
         start = _day + ts;
-        end = _day.AddDays(endDays) + te;
+        end = _day + te;
         if (end <= start) { error = "End must be after start."; return false; }
 
         var liveStart = LiveSessionStart();
         var spanned = new List<(DateTime Start, DateTime End)>();
-        var occupied = new List<(DateTime Start, DateTime End)>();
-        for (var d = start.Date; d < end; d = d.AddDays(1)) occupied.AddRange(OccupiedRangesFor(d, _editingBlock));
-        foreach (var (rs, re) in occupied)
+        foreach (var (rs, re) in OccupiedRangesFor(_day, _editingBlock, end.Date == end ? end.AddDays(-1) : end.Date))
         {
             if (!(start < re && end > rs)) continue; // no overlap at all
             // Splitting around a spanned block is only offered for a fresh add — Commit() has no
@@ -595,7 +590,7 @@ public partial class AddTimeDialog : Window
                 Notes = NoteBox.Text.Trim(),
                 Unscheduled = unscheduled,
             };
-            return A.Log.UpdateSession(_editingBlock, updated);
+            return A.Log.UpdateBlock(_editingBlock, updated);
         }
 
         // One note prompt for the whole add, even when it ends up as several rows (a Times-mode

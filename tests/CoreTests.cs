@@ -121,45 +121,6 @@ public class TrackerServiceTests : IDisposable
     }
 
     [Fact]
-    public void LiveBlockCrossingMidnight_IsSplitPerDay_AndFinalNoteCoversAllRows()
-    {
-        var svc = NewService();
-        var a = P("CONV-CAL", "100320");
-        svc.AddProject(a);
-
-        _now = new DateTime(2026, 7, 21, 0, 0, 0, DateTimeKind.Local).AddHours(23).ToUniversalTime();
-        svc.StartOrSwitch(a);
-        _now = _now.AddHours(2);          // 01:00 next day
-        svc.RollOverMidnight();           // tick after midnight
-        Assert.True(svc.IsRunning);
-        _now = _now.AddHours(1);          // 02:00
-        svc.Stop("overnight run");
-
-        var blocks = _log.ReadMonth(2026, 7).OrderBy(b => b.StartLocal).ToList();
-        Assert.Equal(2, blocks.Count);
-        Assert.Equal(new DateTime(2026, 7, 22), blocks[0].EndLocal);
-        Assert.Equal(blocks[0].EndLocal, blocks[1].StartLocal);
-        Assert.Equal(3600, blocks[0].DurationSeconds);
-        Assert.Equal(7200, blocks[1].DurationSeconds);
-        Assert.All(blocks, b => Assert.Equal("overnight run", b.Notes));
-        Assert.False(string.IsNullOrEmpty(blocks[0].SessionId));
-        Assert.Equal(blocks[0].SessionId, blocks[1].SessionId);
-    }
-
-    [Fact]
-    public void StopAfterMidnightWithoutTick_StillSplitsAtMidnight()
-    {
-        var svc = NewService();
-        var a = P("X", "1");
-        svc.AddProject(a);
-        _now = new DateTime(2026, 7, 21, 23, 0, 0, DateTimeKind.Local).ToUniversalTime();
-        svc.StartOrSwitch(a);
-        _now = _now.AddHours(3);
-        svc.Stop();
-        Assert.Equal(2, _log.ReadMonth(2026, 7).Count);
-    }
-
-    [Fact]
     public void NoteOnStop_BackfillsOntoBlocksSplitByEarlierIdleDiscards()
     {
         var svc = NewService();
@@ -345,98 +306,6 @@ public class CsvTests
     }
 }
 
-public class MidnightMigrationTests : IDisposable
-{
-    private readonly string _dir;
-    private readonly AppPaths _paths;
-    private readonly CsvLog _log;
-
-    public MidnightMigrationTests()
-    {
-        _dir = Path.Combine(Path.GetTempPath(), "tt-tests-" + Guid.NewGuid().ToString("N"));
-        _paths = new AppPaths(_dir);
-        _log = new CsvLog(_paths);
-    }
-
-    public void Dispose() { try { Directory.Delete(_dir, true); } catch { } }
-
-    private static TimeBlock B(DateTime s, DateTime e, string note = "n") => new()
-    {
-        ProjectCode = "P", ProjectName = "P", Asn = "1", ProjectId = "pid", StartLocal = s, EndLocal = e,
-        DurationSeconds = (long)(e - s).TotalSeconds, Notes = note,
-    };
-
-    [Fact]
-    public void OldMidnightCrossingRow_IsSplitPerDay_WithBackup_AndIdempotent()
-    {
-        _log.Append(B(new DateTime(2026, 7, 21, 22, 0, 0), new DateTime(2026, 7, 23, 1, 0, 0), "late"));
-        _log.Append(B(new DateTime(2026, 7, 24, 9, 0, 0), new DateTime(2026, 7, 24, 10, 0, 0)));
-        // append bypasses ReadMonth, so the file is still the old style until it's read
-        var blocks = _log.ReadMonth(2026, 7).OrderBy(b => b.StartLocal).ToList();
-
-        Assert.Equal(4, blocks.Count);
-        Assert.Equal(new[] { 7200L, 86400L, 3600L, 3600L }, blocks.Select(b => b.DurationSeconds).ToArray());
-        Assert.All(blocks.Take(3), b => Assert.Equal("late", b.Notes));
-        Assert.All(blocks, b => Assert.True(b.EndLocal <= b.StartLocal.Date.AddDays(1)));
-        Assert.True(File.Exists(_paths.LogFileFor(new DateTime(2026, 7, 1)) + ".pre-split.bak"));
-        Assert.Equal(4, new CsvLog(_paths).ReadMonth(2026, 7).Count); // re-read: no further change
-    }
-
-    [Fact]
-    public void SplitParts_ShareSessionId_AndEditingTreatsThemAsOne()
-    {
-        _log.Append(B(new DateTime(2026, 7, 21, 22, 0, 0), new DateTime(2026, 7, 22, 1, 0, 0), "late"));
-        var parts = _log.ReadMonth(2026, 7).OrderBy(b => b.StartLocal).ToList();
-        Assert.Equal(2, parts.Count);
-        Assert.False(string.IsNullOrEmpty(parts[0].SessionId));
-        Assert.Equal(parts[0].SessionId, parts[1].SessionId);
-        Assert.NotEqual(parts[0].Id, parts[1].Id);
-
-        var merged = _log.MergedSession(parts[1]);   // editing from either half
-        Assert.Equal(new DateTime(2026, 7, 21, 22, 0, 0), merged.StartLocal);
-        Assert.Equal(new DateTime(2026, 7, 22, 1, 0, 0), merged.EndLocal);
-        Assert.Equal(10800, merged.DurationSeconds);
-
-        // extend the end to 02:30 and change the note: both days update, still one session
-        merged.EndLocal = new DateTime(2026, 7, 22, 2, 30, 0);
-        merged.DurationSeconds = (long)(merged.EndLocal - merged.StartLocal).TotalSeconds;
-        merged.Notes = "edited";
-        Assert.True(_log.UpdateSession(parts[1], merged));
-        var after = _log.ReadMonth(2026, 7).OrderBy(b => b.StartLocal).ToList();
-        Assert.Equal(new[] { 7200L, 9000L }, after.Select(b => b.DurationSeconds).ToArray());
-        Assert.All(after, b => Assert.Equal("edited", b.Notes));
-        Assert.Equal(after[0].SessionId, after[1].SessionId);
-
-        // pull it back inside one day: collapses to an ordinary single block
-        merged = _log.MergedSession(after[0]);
-        merged.EndLocal = new DateTime(2026, 7, 21, 23, 30, 0);
-        Assert.True(_log.UpdateSession(after[0], merged));
-        var single = Assert.Single(_log.ReadMonth(2026, 7));
-        Assert.Equal("", single.SessionId);
-        Assert.Equal(5400, single.DurationSeconds);
-    }
-
-    [Fact]
-    public void DeletingOnePart_DeletesTheWholeSession()
-    {
-        _log.Append(B(new DateTime(2026, 7, 21, 22, 0, 0), new DateTime(2026, 7, 22, 1, 0, 0)));
-        _log.Append(B(new DateTime(2026, 7, 25, 9, 0, 0), new DateTime(2026, 7, 25, 10, 0, 0)));
-        var parts = _log.ReadMonth(2026, 7).OrderBy(b => b.StartLocal).ToList();
-        Assert.True(_log.DeleteBlock(parts[1]));
-        Assert.Single(_log.ReadMonth(2026, 7));
-    }
-
-    [Fact]
-    public void CrossingMonthEnd_MovesSecondPartIntoNextMonthFile()
-    {
-        _log.Append(B(new DateTime(2026, 7, 31, 23, 0, 0), new DateTime(2026, 8, 1, 2, 0, 0)));
-        var july = _log.ReadMonth(2026, 7);
-        var august = _log.ReadMonth(2026, 8);
-        Assert.Equal(3600, Assert.Single(july).DurationSeconds);
-        Assert.Equal(7200, Assert.Single(august).DurationSeconds);
-    }
-}
-
 public class CsvLogCacheTests : IDisposable
 {
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "tt-cache-tests-" + Guid.NewGuid().ToString("N"));
@@ -471,5 +340,75 @@ public class CsvLogCacheTests : IDisposable
 
         Assert.True(_log.DeleteBlock(blocks[1]));
         Assert.Equal(2, _log.ReadMonth(2026, 7).Count);
+    }
+}
+
+public class MidnightSliceTests : IDisposable
+{
+    private readonly string _dir = Path.Combine(Path.GetTempPath(), "tt-slice-tests-" + Guid.NewGuid().ToString("N"));
+    private readonly CsvLog _log;
+
+    public MidnightSliceTests() => _log = new CsvLog(new AppPaths(_dir));
+
+    public void Dispose() { try { Directory.Delete(_dir, true); } catch { } }
+
+    private TimeBlock AddCrossing(DateTime start, DateTime end)
+    {
+        _log.Append(new TimeBlock { ProjectCode = "P", Asn = "1", ProjectName = "N", StartLocal = start, EndLocal = end, DurationSeconds = (long)(end - start).TotalSeconds });
+        return _log.ReadMonth(start.Year, start.Month).Single();
+    }
+
+    [Fact]
+    public void RowStaysOneOnDisk_ButReadsAsPerDaySlices()
+    {
+        AddCrossing(new DateTime(2026, 7, 21, 22, 0, 0), new DateTime(2026, 7, 22, 1, 30, 0));
+
+        Assert.Single(_log.ReadMonth(2026, 7));
+        var d1 = Assert.Single(_log.ReadRange(new DateTime(2026, 7, 21), new DateTime(2026, 7, 21)));
+        var d2 = Assert.Single(_log.ReadRange(new DateTime(2026, 7, 22), new DateTime(2026, 7, 22)));
+        Assert.Equal(7200, d1.DurationSeconds);
+        Assert.Equal(new DateTime(2026, 7, 22), d1.EndLocal);
+        Assert.Equal(5400, d2.DurationSeconds);
+        Assert.Equal(new DateTime(2026, 7, 22), d2.StartLocal);
+        Assert.Same(d1.Id, d1.Id);
+        Assert.Equal(d1.Id, d2.Id);
+        Assert.Equal(7200, _log.SecondsByProjectOn(new DateTime(2026, 7, 21))["P"]);
+        Assert.Equal(5400, _log.SecondsByProjectOn(new DateTime(2026, 7, 22))["P"]);
+    }
+
+    [Fact]
+    public void SliceSpillsInFromPreviousMonth()
+    {
+        AddCrossing(new DateTime(2026, 7, 31, 23, 0, 0), new DateTime(2026, 8, 1, 2, 0, 0));
+        var aug1 = Assert.Single(_log.ReadRange(new DateTime(2026, 8, 1), new DateTime(2026, 8, 1)));
+        Assert.Equal(7200, aug1.DurationSeconds);
+        Assert.Equal(7200, _log.SecondsByProjectOn(new DateTime(2026, 8, 1))["P"]);
+    }
+
+    [Fact]
+    public void EditAndDeleteOnASlice_ActOnTheWholeRow()
+    {
+        AddCrossing(new DateTime(2026, 7, 21, 22, 0, 0), new DateTime(2026, 7, 22, 1, 0, 0));
+        var slice2 = _log.ReadRange(new DateTime(2026, 7, 22), new DateTime(2026, 7, 22)).Single();
+
+        Assert.True(_log.UpdateBlock(slice2, new TimeBlock
+        { StartLocal = new DateTime(2026, 7, 21, 21, 0, 0), EndLocal = new DateTime(2026, 7, 22, 2, 0, 0) }));
+        var row = _log.ReadMonth(2026, 7).Single();
+        Assert.Equal(new DateTime(2026, 7, 21, 21, 0, 0), row.StartLocal);
+        Assert.Equal(5 * 3600, row.DurationSeconds);
+
+        Assert.True(_log.DeleteBlock(_log.ReadRange(new DateTime(2026, 7, 21), new DateTime(2026, 7, 21)).Single()));
+        Assert.Empty(_log.ReadMonth(2026, 7));
+    }
+
+    [Fact]
+    public void Export_ClipsToTheMonth()
+    {
+        AddCrossing(new DateTime(2026, 7, 31, 23, 0, 0), new DateTime(2026, 8, 1, 2, 0, 0));
+        var slices = _log.ReadMonthSlices(2026, 8);
+        var s = Assert.Single(slices);
+        Assert.Equal(new DateTime(2026, 8, 1), s.StartLocal);
+        Assert.Equal(7200, s.DurationSeconds);
+        Assert.Equal(3600, Assert.Single(_log.ReadMonthSlices(2026, 7)).DurationSeconds);
     }
 }
