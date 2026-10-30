@@ -33,7 +33,6 @@ public partial class TimesheetWindow : Window
     /// whichever view was last used rather than a fixed, separately-configured default.</summary>
     private enum ViewMode { Bar, Calendar, Project }
     private ViewMode _viewMode;
-    private bool _hoveringSegment; // mouse is over a stacked-bar segment (tooltip may be showing)
     private DateTime _monthStart; // first of the displayed month, Project view only
     private double _projectScrollOffset; // Project view's horizontal scroll, kept across rebuilds
 
@@ -301,9 +300,11 @@ public partial class TimesheetWindow : Window
         }
         else if (today < _weekStart || today >= _weekStart.AddDays(7)) return;
 
-        // The totals views rebuild their bars each second; doing that under the cursor would dismiss
-        // the segment's tooltip before it can be read, so hold the rebuild while one is hovered.
-        if (_viewMode != ViewMode.Calendar && _hoveringSegment) return;
+        if (TryUpdateLiveBarInPlace(out double barWeekTotal))
+        {
+            WeekTotalText.Text = $"{barWeekTotal:0.0} h";
+            return;
+        }
 
         if (TryUpdateLiveCalendarInPlace(out double weekTotalHours))
         {
@@ -807,18 +808,9 @@ public partial class TimesheetWindow : Window
 
     private List<TimeBlock> GetWeekBlocks() => GetBlocks(_weekStart, _weekStart.AddDays(6));
 
-    private void RenderCurrentWeek(int slideDirection, bool crossFade = false)
+    /// <summary>The displayed week's blocks per day plus the still-running block folded in; shared by the full render and the per-second in-place update.</summary>
+    private (Dictionary<DateTime, List<TimeBlock>> ByDay, TimeBlock? Live, double WeekTotal, DateTime Today) BuildWeekData()
     {
-        StopBreathing();
-        _hoveringSegment = false; // the old segments are about to be replaced; a new one re-raises it on MouseEnter
-        if (_viewMode == ViewMode.Project)
-        {
-            RenderCurrentMonth(slideDirection, crossFade);
-            return;
-        }
-        TotalEyebrow.Text = "WEEK TOTAL";
-        WeekLabel.Text = FormatWeekLabel(_weekStart);
-
         // Raw blocks per day (chronological), not pre-aggregated — grouping into bar segments
         // depends on the merge-mode setting (see BuildDaySegments) and needs the actual session
         // boundaries and notes to do that, not just a per-project total.
@@ -860,6 +852,21 @@ public partial class TimesheetWindow : Window
             // in the 6-minute jumps DurationHours' 0.1h rounding would otherwise produce.
             weekTotal += liveBlock.DurationSeconds / 3600.0;
         }
+        return (byDay, liveBlock, weekTotal, today);
+    }
+
+    private void RenderCurrentWeek(int slideDirection, bool crossFade = false)
+    {
+        StopBreathing();
+        if (_viewMode == ViewMode.Project)
+        {
+            RenderCurrentMonth(slideDirection, crossFade);
+            return;
+        }
+        TotalEyebrow.Text = "WEEK TOTAL";
+        WeekLabel.Text = FormatWeekLabel(_weekStart);
+
+        var (byDay, liveBlock, weekTotal, today) = BuildWeekData();
         WeekTotalText.Text = $"{weekTotal:0.0} h";
 
         double w = ChartCard.ActualWidth > 40 ? ChartCard.ActualWidth - 40 : 820;
@@ -1261,6 +1268,24 @@ public partial class TimesheetWindow : Window
 
     /// <summary>One stacked-bar block — fill, live outline/pulse, and height-gated labels (title
     /// at 20px, ASN at 36px). Shared by the Totals and Project views.</summary>
+    /// <summary>Handles on a segment block's labels so a tick can update them without rebuilding.</summary>
+    private sealed record SegRefs(TextBlock? Title, TextBlock? Hours, int Tier);
+
+    private static int SegmentTier(ChartSegment s, double segH)
+        => (segH >= 20 ? 1 : 0) + (segH >= 34 ? 1 : 0) + (segH >= 50 && !string.IsNullOrEmpty(s.Asn) ? 1 : 0);
+
+    /// <summary>Re-fits an existing segment block to new data; the caller has already checked the
+    /// label layout (tier) is unchanged.</summary>
+    private static void RefitSegment(Border seg, ChartSegment s, double segH)
+    {
+        var refs = (SegRefs)seg.Tag;
+        seg.Height = segH;
+        seg.ToolTip = s.Tooltip;
+        string hoursText = $"{s.Hours:0.#}h";
+        if (refs.Hours is not null) refs.Hours.Text = hoursText;
+        else if (refs.Title is not null) refs.Title.Text = $"{s.Label} Â· {hoursText}";
+    }
+
     private Border MakeSegmentBlock(ChartSegment seg0, double barW, double segH)
     {
         var baseColor = ((SolidColorBrush)seg0.Fill).Color;
@@ -1273,8 +1298,7 @@ public partial class TimesheetWindow : Window
             ToolTip = seg0.Tooltip,
             ClipToBounds = true,
         };
-        seg.MouseEnter += (_, _) => _hoveringSegment = true;
-        seg.MouseLeave += (_, _) => _hoveringSegment = false;
+        TextBlock? titleRef = null, hoursRef = null;
         // A border (not text) is the primary "live" cue since it reads even on a 2px sliver; it's
         // a brighter tint of the segment's own colour rather than the unrelated red "Live" accent.
         if (seg0.IsLive)
@@ -1301,6 +1325,7 @@ public partial class TimesheetWindow : Window
                 FontSize = 11, FontWeight = FontWeights.SemiBold, Foreground = ink,
                 TextWrapping = TextWrapping.Wrap,
             };
+            titleRef = title;
             if (seg0.IsLive)
             {
                 // Grid (not a horizontal StackPanel) so a long title wraps instead of pushing the dot out.
@@ -1322,11 +1347,12 @@ public partial class TimesheetWindow : Window
 
             if (hoursOwnLine)
             {
-                labels.Children.Add(new TextBlock
+                hoursRef = new TextBlock
                 {
                     Text = hoursText, FontSize = 10, FontWeight = FontWeights.SemiBold, Foreground = ink, Opacity = 0.9,
                     Margin = new Thickness(0, 1, 0, 0),
-                });
+                };
+                labels.Children.Add(hoursRef);
             }
 
             if (segH >= 50 && !string.IsNullOrEmpty(seg0.Asn))
@@ -1341,7 +1367,72 @@ public partial class TimesheetWindow : Window
         }
 
         seg.Child = content;
+        seg.Tag = new SegRefs(titleRef, hoursRef, SegmentTier(seg0, segH));
         return seg;
+    }
+
+    // Segments stack bottom-up with a small gap; the day's overall stack (bars + gaps) must land
+    // exactly where its total hours says it should on the axis, so the gaps are carved OUT of the
+    // segments' own share of the height rather than added on top (otherwise a day chopped into many
+    // segments would reach further up the scale than an equal-hours day with one or two).
+    private static (double[] Tops, double[] Heights, double StackTop) StackLayout(
+        IReadOnlyList<ChartSegment> segments, double axisMax, double plotH)
+    {
+        const double segGap = 2;
+        double dayTotalHours = segments.Sum(s => s.Hours);
+        double idealStackH = dayTotalHours / axisMax * plotH;
+        double gapTotal = Math.Max(0, segments.Count - 1) * segGap;
+        double availableForBars = Math.Max(0, idealStackH - gapTotal);
+        var tops = new double[segments.Count];
+        var heights = new double[segments.Count];
+        double yCursor = plotH;
+        for (int i = 0; i < segments.Count; i++)
+        {
+            double segH = dayTotalHours > 0 ? Math.Max(2, segments[i].Hours / dayTotalHours * availableForBars) : 2;
+            heights[i] = segH;
+            tops[i] = yCursor - segH;
+            yCursor -= segH + segGap;
+        }
+        return (tops, heights, yCursor);
+    }
+
+    /// <summary>Today's column in the totals bar view, kept so each tick can update it in place.</summary>
+    private sealed record BarLive(Canvas Canvas, DateTime Day, double AxisMax, double PlotH,
+        List<ChartSegment> Segments, List<Border> Borders, Border Plus);
+    private BarLive? _barLive;
+
+    /// <summary>Per-second update of the bar view: refits only today's segments and the plus button
+    /// above them. False when anything beyond that would change (axis scale, segment set or label
+    /// layout), so the caller falls back to a full render.</summary>
+    private bool TryUpdateLiveBarInPlace(out double weekTotalHours)
+    {
+        weekTotalHours = 0;
+        if (_viewMode != ViewMode.Bar || _barLive is not { } live || !A.Tracker.IsRunning) return false;
+        var (byDay, liveBlock, weekTotal, today) = BuildWeekData();
+        if (today != live.Day || liveBlock is null || !byDay.TryGetValue(today, out var todayBlocks)) return false;
+
+        double rawMax = byDay.Values.Select(day => day.Sum(b => HoursOf(b, liveBlock))).DefaultIfEmpty(0).Max();
+        if (ComputeAxisScale(rawMax).Item1 != live.AxisMax) return false;
+
+        var segs = BuildDaySegments(todayBlocks, otherFill: (Brush)FindResource("TextFaint"), liveBlock: liveBlock);
+        if (segs.Count != live.Segments.Count) return false;
+        for (int i = 0; i < segs.Count; i++)
+            if (segs[i].Label != live.Segments[i].Label || segs[i].IsLive != live.Segments[i].IsLive) return false;
+
+        var layout = StackLayout(segs, live.AxisMax, live.PlotH);
+        for (int i = 0; i < segs.Count; i++)
+            if (live.Borders[i].Tag is not SegRefs refs || refs.Tier != SegmentTier(segs[i], layout.Heights[i])) return false;
+
+        for (int i = 0; i < segs.Count; i++)
+        {
+            RefitSegment(live.Borders[i], segs[i], layout.Heights[i]);
+            Canvas.SetTop(live.Borders[i], layout.Tops[i]);
+        }
+        Canvas.SetTop(live.Plus, Math.Max(0, layout.StackTop - 28));
+        live.Segments.Clear();
+        live.Segments.AddRange(segs);
+        weekTotalHours = weekTotal;
+        return true;
     }
 
     private FrameworkElement BuildChart(Dictionary<DateTime, List<TimeBlock>> byDay, TimeBlock? liveBlock,
@@ -1356,6 +1447,7 @@ public partial class TimesheetWindow : Window
         double plotH = Math.Max(60, height - xAxisH);
 
         var canvas = new Canvas { Width = width, Height = height };
+        _barLive = null;
         var weekAi = AiOn ? AiSessionsBetween(_weekStart, _weekStart.AddDays(6)) : new List<AiSession>();
         var aiByDay = weekAi.GroupBy(AiChartMath.LocalDay).ToDictionary(g => g.Key, g => g.ToList());
         var costAxis = AiChartMath.NiceAxis(MaxStack(aiByDay.Values));
@@ -1438,29 +1530,17 @@ public partial class TimesheetWindow : Window
             var segments = BuildDaySegments(byDay[day], otherFill: faintBrush,
                 liveBlock: day == today ? liveBlock : null);
 
-            const double segGap = 2; // a small gap between stacked segments reads less "blocky"
-            // The day's OVERALL stack (bars + gaps together) has to land exactly where its total
-            // hours says it should on the axis — otherwise splitting the same total across MORE
-            // segments visibly (and wrongly) grows the stack taller purely from the fixed per-gap
-            // overhead piling up, so a day chopped into many small segments reaches further up
-            // the scale than an equal-hours day with only one or two. Gaps are carved OUT of the
-            // segments' own share of that height instead of being added on top of it — with a
-            // single segment (no gaps) this reduces to exactly the old seg.Hours/axisMax*plotH.
-            double dayTotalHours = segments.Sum(s => s.Hours);
-            double idealStackH = dayTotalHours / axisMax * plotH;
-            double gapTotal = Math.Max(0, segments.Count - 1) * segGap;
-            double availableForBars = Math.Max(0, idealStackH - gapTotal);
-
-            double yCursor = plotH;
-            foreach (var seg0 in segments)
+            var layout = StackLayout(segments, axisMax, plotH);
+            var segBorders = new List<Border>();
+            for (int si = 0; si < segments.Count; si++)
             {
-                double segH = dayTotalHours > 0 ? Math.Max(2, seg0.Hours / dayTotalHours * availableForBars) : 2;
-                var seg = MakeSegmentBlock(seg0, barW, segH);
+                var seg = MakeSegmentBlock(segments[si], barW, layout.Heights[si]);
                 Canvas.SetLeft(seg, cx - barW / 2);
-                Canvas.SetTop(seg, yCursor - segH);
+                Canvas.SetTop(seg, layout.Tops[si]);
                 canvas.Children.Add(seg);
-                yCursor -= segH + segGap;
+                segBorders.Add(seg);
             }
+            double yCursor = layout.StackTop;
 
             // A small "+" riding just above this day's bar — same Add dialog as the header's own
             // "+" (Amount mode), just pre-set to this column's day instead of always today, the
@@ -1489,6 +1569,8 @@ public partial class TimesheetWindow : Window
                 if (added) { _cachedWeekStart = null; RenderCurrentWeek(0); }
             };
             canvas.Children.Add(plusBtn);
+            if (day == today)
+                _barLive = new BarLive(canvas, day, axisMax, plotH, segments, segBorders, plusBtn);
 
             // Clickable — opens the day's individual blocks (view/delete). Kept off the bars
             // themselves so each segment's own hover tooltip isn't swallowed by a click target.
