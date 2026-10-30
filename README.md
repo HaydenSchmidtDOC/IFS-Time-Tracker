@@ -38,7 +38,7 @@ it runs. Release history is in [CHANGELOG.md](CHANGELOG.md).
 Open the timesheets view from the main window. It has three views:
 
 - **Totals**: each day's hours stacked by project.
-- **Calendar**: your day laid out by time. Drag to add time, click a block to edit it, drag its
+- **Calendar**: your day laid out by time. Drag to add time (across several days if you like), click a block to edit it, drag its
   body to move it, drag its edges to resize, and hover then click ✕ to delete.
 - **Project**: one bar per project for the month.
 
@@ -103,7 +103,7 @@ start/switch/stop; extend behaviour there rather than in UI code-behind.
 ### Releasing
 
 1. Bump `<Version>` in `src/App/TimeTracker.csproj` and add a `CHANGELOG.md` entry.
-2. Merge to `main`, push, then tag and push the tag: `git tag v0.6.5 && git push origin v0.6.5`.
+2. Merge to `main`, push, then tag and push the tag: `git tag v0.7.3 && git push origin v0.7.3`.
 3. `.github/workflows/release.yml` builds the exe and publishes it with a `latest.json`
    (version, URL, SHA256) that the in-app updater reads. It only publishes if the tag points at
    the head of `main`.

@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.7.2] Beta — 2026-10-30
+
+### New
+
+- **Sessions can cross midnight.** A session that runs past midnight is stored as one entry and shown
+  split at midnight in each day's column. Editing, deleting or dragging either half acts on the whole
+  session, and both halves move together while you drag. Exports and totals clip it to each day and month.
+- **Draw, drag and resize across days.** Draw a new block over several days, drag or resize a block past
+  midnight into the next or previous day, and drop a bar onto a midnight split to push it. The part that
+  falls on another day previews live while you drag.
+- **One snapping set** for drag, resize and draw: the time grid, the edges of other blocks, and "now"
+  (so a block can be drawn right up to the current time).
+- **Totals / Project boxes** show their hours on their own line under the title, and titles wrap instead of
+  being cut off with an ellipsis (also in the calendar, unscheduled chips and the day's block list).
+- AI session cost is split per day across midnight, and AI sessions are stored per month.
+
+### Fixed
+
+- Editing a session that crosses midnight could crash the timesheet.
+- The Totals and Project views rebuilt themselves every second, dismissing tooltips before they could be
+  read and wasting work. They now stay still while idle and update only the recording column while
+  tracking.
+- Overnight sessions and editing in the timesheet no longer cause slowdowns: parsed month logs are cached
+  and AI session writes are debounced.
+
 ## [0.7.1] Beta — 2026-10-14
 
 ### Fixed
