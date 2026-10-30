@@ -300,6 +300,10 @@ public partial class TimesheetWindow : Window
         }
         else if (today < _weekStart || today >= _weekStart.AddDays(7)) return;
 
+        // Idle: nothing in the totals views moves second to second, so a rebuild would only dismiss
+        // whatever tooltip is open. Starting/stopping a session re-renders through OnStateChanged.
+        if (_viewMode != ViewMode.Calendar && !A.Tracker.IsRunning) return;
+
         if (TryUpdateLiveBarInPlace(out double barWeekTotal) || TryUpdateLiveProjectInPlace(out barWeekTotal))
         {
             WeekTotalText.Text = $"{barWeekTotal:0.0} h";
