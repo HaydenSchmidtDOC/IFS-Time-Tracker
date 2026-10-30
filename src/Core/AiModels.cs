@@ -69,6 +69,12 @@ public sealed class AiSession
     /// <summary>Spend carried over from before the statusline total last reset to a lower value.</summary>
     public double CostBaseUsd { get; set; }
     public double LastReportedUsd { get; set; }
+    /// <summary>Cost per local day ("yyyy-MM-dd"), summing to <see cref="CostUsd"/>. A session is one
+    /// record, but spend is credited to the day it was reported: whatever the first day had accrued
+    /// when midnight passed stays there, and everything after lands on the later day(s) as
+    /// (reported total - already credited). Empty for sessions recorded before this existed;
+    /// those count wholly toward their start day.</summary>
+    public Dictionary<string, double> DayCosts { get; set; } = new();
 
     public long InputTokens { get; set; }
     public long OutputTokens { get; set; }

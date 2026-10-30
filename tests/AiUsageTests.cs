@@ -177,6 +177,50 @@ public sealed class AiUsageTests : IDisposable
         Assert.Equal(2.5, Svc().Snapshot()[0].CostUsd, 6);
     }
 
+    private AiSessionService SvcAt(Func<DateTime> now)
+        => new(_paths, () => new Settings(), () => null, PricingTable.Defaults(), now);
+
+    private static DateTime LocalUtc(int y, int m, int d, int h, int min)
+        => new DateTime(y, m, d, h, min, 0, DateTimeKind.Local).ToUniversalTime();
+
+    [Fact]
+    public void Session_across_midnight_credits_first_day_what_it_had_and_remainder_to_second()
+    {
+        var now = LocalUtc(2026, 7, 21, 23, 0);
+        var svc = SvcAt(() => now);
+        svc.Handle(Start("s1"));
+        now = LocalUtc(2026, 7, 21, 23, 50);
+        svc.Handle(new AiPipeMessage { Kind = "cost", SessionId = "s1", TotalCostUsd = 4.0 });
+        now = LocalUtc(2026, 7, 22, 0, 30);
+        svc.Handle(new AiPipeMessage { Kind = "cost", SessionId = "s1", TotalCostUsd = 5.5 });
+
+        var slices = svc.Snapshot().OrderBy(s => s.StartedUtc).ToList();
+        Assert.Equal(2, slices.Count);
+        Assert.Equal(4.0, slices[0].CostUsd, 6);
+        Assert.Equal(1.5, slices[1].CostUsd, 6);
+        Assert.Equal(new DateTime(2026, 7, 22), slices[1].StartedUtc.ToLocalTime());
+        Assert.Equal(new DateTime(2026, 7, 22), slices[0].LastSeenUtc.ToLocalTime());
+        Assert.Equal(new DateTime(2026, 7, 21), AiChartMath.LocalDay(slices[0]));
+        Assert.Equal(new DateTime(2026, 7, 22), AiChartMath.LocalDay(slices[1]));
+    }
+
+    [Fact]
+    public void Sessions_are_stored_per_month_and_old_single_file_is_migrated()
+    {
+        File.WriteAllText(_paths.AiSessionsFile, System.Text.Json.JsonSerializer.Serialize(new[]
+        {
+            new AiSession { SessionId = "a", StartedUtc = LocalUtc(2026, 6, 30, 10, 0), LastSeenUtc = LocalUtc(2026, 6, 30, 11, 0), CostUsd = 1 },
+            new AiSession { SessionId = "b", StartedUtc = LocalUtc(2026, 7, 2, 10, 0), LastSeenUtc = LocalUtc(2026, 7, 2, 11, 0), CostUsd = 2 },
+        }));
+        var svc = Svc();
+        Assert.Equal(2, svc.Snapshot().Count);
+        Assert.True(File.Exists(_paths.AiSessionsFileFor(new DateTime(2026, 6, 1))));
+        Assert.True(File.Exists(_paths.AiSessionsFileFor(new DateTime(2026, 7, 1))));
+        Assert.False(File.Exists(_paths.AiSessionsFile));
+        Assert.True(File.Exists(_paths.AiSessionsFile + ".pre-split.bak"));
+        Assert.Equal(2, Svc().Snapshot().Count);
+    }
+
     [Fact]
     public void Records_persist_across_instances()
     {

@@ -28,6 +28,10 @@ public sealed class AppPaths
     public string StateFile     => Path.Combine(DataFolder, "state.json");
     public string SettingsFile  => Path.Combine(DataFolder, "settings.json");
     public string AiSessionsFile => Path.Combine(DataFolder, "ai_sessions.json");
+    /// <summary>AI sessions are stored per month of their start, e.g. <c>ai_sessions-2026-07.json</c>,
+    /// so a ping only ever rewrites the current month's small file.</summary>
+    public string AiSessionsFileFor(DateTime localDate)
+        => Path.Combine(DataFolder, $"ai_sessions-{localDate:yyyy-MM}.json");
     public string PricingFile    => Path.Combine(DataFolder, "pricing.json");
     public string AiHookScript   => Path.Combine(DataFolder, "ai-hook.ps1");
 

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 
 namespace TimeTracker.Core;
@@ -14,15 +15,18 @@ public sealed class AiSessionService
     private readonly Func<Settings> _settings;
     private readonly Func<Project?> _liveProject;
     private readonly PricingTable _pricing;
+    private readonly Func<DateTime> _utcNow;
     private readonly object _gate = new();
-    private readonly List<AiSession> _sessions;
+    private readonly HashSet<string> _dirtyMonths = new();
+    private List<AiSession> _sessions;
 
     /// <summary>Raised (outside the lock) when a new session passes the endpoint filter.</summary>
     public event Action<AiSession>? SessionStarted;
     public event Action? Changed;
 
-    public AiSessionService(AppPaths paths, Func<Settings> settings, Func<Project?> liveProject, PricingTable? pricing = null)
+    public AiSessionService(AppPaths paths, Func<Settings> settings, Func<Project?> liveProject, PricingTable? pricing = null, Func<DateTime>? utcNow = null)
     {
+        _utcNow = utcNow ?? (() => DateTime.UtcNow);
         _paths = paths;
         _settings = settings;
         _liveProject = liveProject;
@@ -32,10 +36,10 @@ public sealed class AiSessionService
 
     private IReadOnlyList<AiSession>? _snapshot;
 
-    /// <summary>Cached copy of all sessions; rebuilt only after a mutation (every mutation calls Save).</summary>
+    /// <summary>Cached copy of all sessions, one entry per local day each touched (see <see cref="Slices"/>); rebuilt only after a mutation (every mutation calls Save).</summary>
     public IReadOnlyList<AiSession> Snapshot()
     {
-        lock (_gate) return _snapshot ??= _sessions.Select(Clone).ToList();
+        lock (_gate) return _snapshot ??= _sessions.SelectMany(Slices).ToList();
     }
 
     public void Handle(AiPipeMessage msg)
@@ -60,7 +64,7 @@ public sealed class AiSessionService
             var existing = Find(msg.Provider, msg.SessionId);
             if (existing is not null)
             {
-                existing.LastSeenUtc = DateTime.UtcNow;
+                existing.LastSeenUtc = _utcNow();
                 if (!string.IsNullOrEmpty(msg.TranscriptPath)) existing.TranscriptPath = msg.TranscriptPath;
                 if (!string.IsNullOrEmpty(msg.Model)) existing.Model = msg.Model;
             }
@@ -75,8 +79,8 @@ public sealed class AiSessionService
                     ProjectCode = live?.Code,
                     Cwd = msg.Cwd ?? "",
                     Endpoint = cls,
-                    StartedUtc = DateTime.UtcNow,
-                    LastSeenUtc = DateTime.UtcNow,
+                    StartedUtc = _utcNow(),
+                    LastSeenUtc = _utcNow(),
                     Model = msg.Model,
                     TranscriptPath = msg.TranscriptPath,
                 };
@@ -84,7 +88,7 @@ public sealed class AiSessionService
             }
             // A brand-new session can't be rebuilt from a transcript (its project assignment lives
             // only here), so it's written straight away; a repeat ping only bumps LastSeen.
-            if (created is not null) Save(); else SaveDeferred();
+            if (created is not null) Save(created); else SaveDeferred(existing!);
         }
         if (created is not null) SessionStarted?.Invoke(Clone(created));
         Changed?.Invoke();
@@ -103,11 +107,11 @@ public sealed class AiSessionService
             // (e.g. after resume), so bank what we had so no spend is lost either way.
             if (total < s.LastReportedUsd) s.CostBaseUsd += s.LastReportedUsd;
             s.LastReportedUsd = total;
-            s.CostUsd = s.CostBaseUsd + total;
+            SetCost(s, s.CostBaseUsd + total, _utcNow().ToLocalTime());
             s.CostSource = "statusline";
-            s.LastSeenUtc = DateTime.UtcNow;
+            s.LastSeenUtc = _utcNow();
             if (!string.IsNullOrEmpty(msg.Model)) s.Model = msg.Model;
-            SaveDeferred();
+            SaveDeferred(s);
         }
         Changed?.Invoke();
     }
@@ -134,10 +138,10 @@ public sealed class AiSessionService
             s.HasUnpricedUsage = unpriced;
             if (s.CostSource != "statusline" || overrideStatusline)
             {
-                s.CostUsd = cost;
+                SetCost(s, cost, s.LastSeenUtc.ToLocalTime());
                 s.CostSource = "transcript";
             }
-            Save();
+            Save(s);
         }
         Changed?.Invoke();
         return true;
@@ -151,7 +155,7 @@ public sealed class AiSessionService
             if (s is null) return false;
             s.ProjectId = project?.Id;
             s.ProjectCode = project?.Code;
-            Save();
+            Save(s);
         }
         Changed?.Invoke();
         return true;
@@ -162,15 +166,87 @@ public sealed class AiSessionService
 
     private static AiSession Clone(AiSession s) => s.ShallowCopy();
 
+    private static string DayKey(DateTime localDay) => localDay.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+
+    /// <summary>Sets the session's cumulative cost, crediting any increase to the local day of
+    /// <paramref name="when"/> (a decrease, e.g. a transcript re-price, is taken back off the newest days).</summary>
+    private static void SetCost(AiSession s, double newCost, DateTime when)
+    {
+        if (s.DayCosts.Count == 0 && s.CostUsd > 0) s.DayCosts[DayKey(s.StartedUtc.ToLocalTime())] = s.CostUsd;
+        double delta = newCost - s.CostUsd;
+        s.CostUsd = newCost;
+        if (delta > 0)
+        {
+            var key = DayKey(when);
+            s.DayCosts[key] = s.DayCosts.GetValueOrDefault(key) + delta;
+        }
+        else if (delta < 0)
+        {
+            foreach (var key in s.DayCosts.Keys.OrderByDescending(k => k).ToList())
+            {
+                var take = Math.Min(-delta, s.DayCosts[key]);
+                s.DayCosts[key] -= take;
+                delta += take;
+                if (delta >= 0) break;
+            }
+        }
+    }
+
+    /// <summary>The session as one entry per local day it ran across, each carrying that day's cost (and
+    /// a cost-proportional share of the tokens) and its start/end clipped to the day, so charts and
+    /// totals bucket by day without knowing sessions can cross midnight. A single-day session is
+    /// returned as-is.</summary>
+    private static IEnumerable<AiSession> Slices(AiSession s)
+    {
+        var first = s.StartedUtc.ToLocalTime().Date;
+        var last = s.LastSeenUtc.ToLocalTime().Date;
+        if (last <= first) { yield return Clone(s); yield break; }
+
+        for (var day = first; day <= last; day = day.AddDays(1))
+        {
+            double cost = s.DayCosts.Count == 0 ? (day == first ? s.CostUsd : 0) : s.DayCosts.GetValueOrDefault(DayKey(day));
+            double share = s.CostUsd > 0 ? cost / s.CostUsd : (day == first ? 1 : 0);
+            var slice = Clone(s);
+            slice.DayCosts = new();
+            slice.CostUsd = cost;
+            if (day > first) slice.StartedUtc = DateTime.SpecifyKind(day, DateTimeKind.Local).ToUniversalTime();
+            if (day < last) slice.LastSeenUtc = DateTime.SpecifyKind(day.AddDays(1), DateTimeKind.Local).ToUniversalTime();
+            slice.InputTokens = (long)Math.Round(s.InputTokens * share);
+            slice.OutputTokens = (long)Math.Round(s.OutputTokens * share);
+            slice.CacheReadTokens = (long)Math.Round(s.CacheReadTokens * share);
+            slice.CacheWriteTokens = (long)Math.Round(s.CacheWriteTokens * share);
+            yield return slice;
+        }
+    }
+
+    private string MonthFile(AiSession s) => _paths.AiSessionsFileFor(s.StartedUtc.ToLocalTime());
+
+    /// <summary>Loads every month file. The old single ai_sessions.json is split into month files on
+    /// first run (kept as ai_sessions.json.pre-split.bak).</summary>
     private List<AiSession> Load()
     {
+        var all = new List<AiSession>();
+        foreach (var file in Directory.GetFiles(_paths.DataFolder, "ai_sessions-*.json").OrderBy(f => f))
+            try { all.AddRange(JsonSerializer.Deserialize<List<AiSession>>(File.ReadAllText(file), Opts) ?? new()); } catch { }
+
         try
         {
             if (File.Exists(_paths.AiSessionsFile))
-                return JsonSerializer.Deserialize<List<AiSession>>(File.ReadAllText(_paths.AiSessionsFile), Opts) ?? new();
+            {
+                var legacy = JsonSerializer.Deserialize<List<AiSession>>(File.ReadAllText(_paths.AiSessionsFile), Opts) ?? new();
+                // A crash after writing the month files but before the rename would leave both; keep the month copy.
+                foreach (var s in legacy)
+                    if (!all.Any(x => x.SessionId == s.SessionId && x.Provider == s.Provider)) all.Add(s);
+                _sessions = all;
+                foreach (var s in all) _dirtyMonths.Add(MonthFile(s));
+                Save();
+                var bak = _paths.AiSessionsFile + ".pre-split.bak";
+                if (File.Exists(bak)) File.Delete(bak);
+                File.Move(_paths.AiSessionsFile, bak);
+            }
         }
         catch { }
-        return new();
+        return all;
     }
 
     /// <summary>How long a cost/keep-alive ping may sit unwritten. The statusline reports a
@@ -180,11 +256,12 @@ public sealed class AiSessionService
     private System.Threading.Timer? _flushTimer;
     private bool _dirty;
 
-    /// <summary>Marks the sessions changed and writes them after <see cref="FlushDelay"/>, coalescing
+    /// <summary>Marks the session changed and writes them after <see cref="FlushDelay"/>, coalescing
     /// any pings in between. Caller holds the lock.</summary>
-    private void SaveDeferred()
+    private void SaveDeferred(AiSession s)
     {
         _snapshot = null;
+        _dirtyMonths.Add(MonthFile(s));
         _dirty = true;
         _flushTimer ??= new System.Threading.Timer(_ => Flush(), null, Timeout.Infinite, Timeout.Infinite);
         _flushTimer.Change(FlushDelay, Timeout.InfiniteTimeSpan);
@@ -200,13 +277,24 @@ public sealed class AiSessionService
         }
     }
 
+    private void Save(AiSession s)
+    {
+        _dirtyMonths.Add(MonthFile(s));
+        Save();
+    }
+
+    /// <summary>Writes the month files that changed since the last save.</summary>
     private void Save()
     {
         _snapshot = null;
         _dirty = false;
-        var tmp = _paths.AiSessionsFile + ".tmp";
-        File.WriteAllText(tmp, JsonSerializer.Serialize(_sessions, Opts));
-        if (File.Exists(_paths.AiSessionsFile)) File.Replace(tmp, _paths.AiSessionsFile, null);
-        else File.Move(tmp, _paths.AiSessionsFile);
+        foreach (var file in _dirtyMonths.ToList())
+        {
+            var tmp = file + ".tmp";
+            File.WriteAllText(tmp, JsonSerializer.Serialize(_sessions.Where(x => MonthFile(x) == file).ToList(), Opts));
+            if (File.Exists(file)) File.Replace(tmp, file, null);
+            else File.Move(tmp, file);
+            _dirtyMonths.Remove(file);
+        }
     }
 }
