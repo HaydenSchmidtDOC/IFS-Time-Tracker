@@ -300,7 +300,7 @@ public partial class TimesheetWindow : Window
         }
         else if (today < _weekStart || today >= _weekStart.AddDays(7)) return;
 
-        if (TryUpdateLiveBarInPlace(out double barWeekTotal))
+        if (TryUpdateLiveBarInPlace(out double barWeekTotal) || TryUpdateLiveProjectInPlace(out barWeekTotal))
         {
             WeekTotalText.Text = $"{barWeekTotal:0.0} h";
             return;
@@ -881,11 +881,9 @@ public partial class TimesheetWindow : Window
 
     // ==================== project (per-project month) view ====================
 
-    private void RenderCurrentMonth(int slideDirection, bool crossFade)
+    /// <summary>The displayed month's blocks per enabled project plus the still-running block; shared by the full render and the per-second in-place update.</summary>
+    private (List<Project> Projects, Dictionary<string, List<TimeBlock>> ByProject, TimeBlock? Live, List<TimeBlock> Shown) BuildMonthData()
     {
-        TotalEyebrow.Text = "MONTH TOTAL";
-        WeekLabel.Text = _monthStart.ToString("MMMM yyyy");
-
         var monthEnd = _monthStart.AddMonths(1).AddDays(-1);
         var projects = A.Tracker.Projects.Where(p => p.Enabled).OrderBy(p => p.Order).ToList();
         var byProject = projects.ToDictionary(p => p.Id, _ => new List<TimeBlock>(), StringComparer.Ordinal);
@@ -917,6 +915,15 @@ public partial class TimesheetWindow : Window
         }
         foreach (var list in byProject.Values) list.Sort((a, b) => a.StartLocal.CompareTo(b.StartLocal));
 
+        return (projects, byProject, liveBlock, shown);
+    }
+
+    private void RenderCurrentMonth(int slideDirection, bool crossFade)
+    {
+        TotalEyebrow.Text = "MONTH TOTAL";
+        WeekLabel.Text = _monthStart.ToString("MMMM yyyy");
+
+        var (projects, byProject, liveBlock, shown) = BuildMonthData();
         WeekTotalText.Text = $"{shown.Sum(b => HoursOf(b, liveBlock)):0.0} h";
 
         double w = ChartCard.ActualWidth > 40 ? ChartCard.ActualWidth - 40 : 820;
@@ -942,7 +949,7 @@ public partial class TimesheetWindow : Window
             var lines = sessions.Take(12).Select(b => $"{b.StartLocal:MMM d} · {HoursOf(b, liveBlock):0.0} h");
             string tip = $"{p.Code} · {count} · {total:0.0} h{(live ? " · recording now" : "")}\n" + string.Join("\n", lines);
             if (sessions.Count > 12) tip += $"\n… and {sessions.Count - 12} more";
-            segs.Add(new ChartSegment($"{total:0.#}h · {count}", p.Asn, total, fill, tip, sessions[^1].EndLocal, live));
+            segs.Add(new ChartSegment(count, p.Asn, total, fill, tip, sessions[^1].EndLocal, live));
             return segs;
         }
 
@@ -955,9 +962,47 @@ public partial class TimesheetWindow : Window
                 : $"{b.StartLocal:ddd MMM d}\n{b.StartLocal:h:mm tt} – {b.EndLocal:h:mm tt}";
             string tip = $"{p.Code} · {hours:0.0} h{(live ? " · recording now" : "")}\n{when}";
             if (!string.IsNullOrWhiteSpace(b.Notes)) tip += $"\nNote: {b.Notes}";
-            segs.Add(new ChartSegment($"{b.StartLocal:MMM d} · {hours:0.#}h", p.Asn, hours, fill, tip, b.StartLocal, live));
+            segs.Add(new ChartSegment($"{b.StartLocal:MMM d}", p.Asn, hours, fill, tip, b.StartLocal, live));
         }
         return segs;
+    }
+
+    /// <summary>The recording project's column in the Project view, kept so each tick can update it in place.</summary>
+    private sealed record ProjLive(string ProjectId, double AxisMax, double PlotH,
+        List<ChartSegment> Segments, List<Border> Borders, TextBlock FooterHours);
+    private ProjLive? _projLive;
+
+    /// <summary>Per-second update of the Project view: refits the recording project's column and
+    /// the month total. False when more than that would change (axis scale, segment set or label
+    /// layout), so the caller falls back to a full render.</summary>
+    private bool TryUpdateLiveProjectInPlace(out double monthTotalHours)
+    {
+        monthTotalHours = 0;
+        if (_viewMode != ViewMode.Project || _projLive is not { } live || !A.Tracker.IsRunning) return false;
+        var (projects, byProject, liveBlock, shown) = BuildMonthData();
+        if (liveBlock is null || liveBlock.ProjectId != live.ProjectId) return false;
+
+        var segsByProject = projects.ToDictionary(pr => pr.Id, pr => BuildProjectSegments(pr, byProject[pr.Id], liveBlock), StringComparer.Ordinal);
+        double rawMax = segsByProject.Values.Select(sg => sg.Sum(x => x.Hours)).DefaultIfEmpty(0).Max();
+        if (ComputeAxisScale(rawMax).Item1 != live.AxisMax) return false;
+        if (!segsByProject.TryGetValue(live.ProjectId, out var segs) || segs.Count != live.Segments.Count) return false;
+        for (int i = 0; i < segs.Count; i++)
+            if (segs[i].Label != live.Segments[i].Label || segs[i].IsLive != live.Segments[i].IsLive) return false;
+
+        var layout = StackLayout(segs, live.AxisMax, live.PlotH);
+        for (int i = 0; i < segs.Count; i++)
+            if (live.Borders[i].Tag is not SegRefs refs || refs.Tier != SegmentTier(segs[i], layout.Heights[i])) return false;
+
+        for (int i = 0; i < segs.Count; i++)
+        {
+            RefitSegment(live.Borders[i], segs[i], layout.Heights[i]);
+            Canvas.SetTop(live.Borders[i], layout.Tops[i]);
+        }
+        live.FooterHours.Text = $"{segs.Sum(x => x.Hours):0.0} h";
+        live.Segments.Clear();
+        live.Segments.AddRange(segs);
+        monthTotalHours = shown.Sum(b => HoursOf(b, liveBlock));
+        return true;
     }
 
     private FrameworkElement BuildProjectView(List<Project> projects, Dictionary<string, List<TimeBlock>> byProject,
@@ -978,6 +1023,7 @@ public partial class TimesheetWindow : Window
         var gridBrush = (Brush)FindResource("Border");
         var monoFont = (FontFamily)FindResource("MonoFont");
 
+        _projLive = null;
         var segsByProject = projects.ToDictionary(p => p.Id, p => BuildProjectSegments(p, byProject[p.Id], liveBlock), StringComparer.Ordinal);
         double rawMax = segsByProject.Values.Select(s => s.Sum(x => x.Hours)).DefaultIfEmpty(0).Max();
         var (axisMax, step) = ComputeAxisScale(rawMax);
@@ -1021,7 +1067,6 @@ public partial class TimesheetWindow : Window
             axis.Children.Add(label);
         }
 
-        const double segGap = 2;
         for (int i = 0; i < projects.Count; i++)
         {
             var p = projects[i];
@@ -1031,31 +1076,30 @@ public partial class TimesheetWindow : Window
             if (AiOn && monthAi.TryGetValue(p.Id, out var projAi))
                 AddAiStack(canvas, projAi, colLeft + geom.AiLeft, geom.AiW, plotH, costAxis.Max);
 
-            // Gaps are carved out of the stack's own height so the column's top lands exactly at
-            // its total on the axis no matter how many sessions it's split into (see BuildChart).
             double total = segs.Sum(s => s.Hours);
-            double available = Math.Max(0, total / axisMax * plotH - Math.Max(0, segs.Count - 1) * segGap);
-            double yCursor = plotH;
-            foreach (var s in segs)
+            var layout = StackLayout(segs, axisMax, plotH);
+            var segBorders = new List<Border>();
+            for (int si = 0; si < segs.Count; si++)
             {
-                double segH = total > 0 ? Math.Max(2, s.Hours / total * available) : 2;
-                var block = MakeSegmentBlock(s, barW, segH);
+                var block = MakeSegmentBlock(segs[si], barW, layout.Heights[si]);
                 Canvas.SetLeft(block, cx - barW / 2);
-                Canvas.SetTop(block, yCursor - segH);
+                Canvas.SetTop(block, layout.Tops[si]);
                 canvas.Children.Add(block);
-                yCursor -= segH + segGap;
+                segBorders.Add(block);
             }
-
             var footer = new StackPanel { Width = colW, ToolTip = string.IsNullOrWhiteSpace(p.Name) ? p.Code : $"{p.Code} · {p.Name}" };
             footer.Children.Add(new TextBlock
             {
                 Text = p.Code, FontSize = 11.5, FontWeight = FontWeights.Medium, Foreground = dimBrush,
                 TextAlignment = TextAlignment.Center, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(4, 0, 4, 0),
             });
-            footer.Children.Add(new TextBlock
+            var footerHours = new TextBlock
             {
                 Text = $"{total:0.0} h", FontSize = 9.5, Foreground = faintBrush, TextAlignment = TextAlignment.Center,
-            });
+            };
+            footer.Children.Add(footerHours);
+            if (liveBlock is not null && p.Id == liveBlock.ProjectId)
+                _projLive = new ProjLive(p.Id, axisMax, plotH, segs, segBorders, footerHours);
             Canvas.SetLeft(footer, colLeft);
             Canvas.SetTop(footer, plotH + 4);
             canvas.Children.Add(footer);
@@ -1283,7 +1327,7 @@ public partial class TimesheetWindow : Window
         seg.ToolTip = s.Tooltip;
         string hoursText = $"{s.Hours:0.#}h";
         if (refs.Hours is not null) refs.Hours.Text = hoursText;
-        else if (refs.Title is not null) refs.Title.Text = $"{s.Label} Â· {hoursText}";
+        else if (refs.Title is not null) refs.Title.Text = $"{s.Label} · {hoursText}";
     }
 
     private Border MakeSegmentBlock(ChartSegment seg0, double barW, double segH)
