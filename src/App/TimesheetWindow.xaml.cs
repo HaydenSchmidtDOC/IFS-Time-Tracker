@@ -2203,6 +2203,7 @@ public partial class TimesheetWindow : Window
         Border? addHighlight = null;
         TextBlock? addLabel = null;
         double addAnchorY = 0;
+        var dragGhosts = new List<Border>(); // preview pieces on other days while a drag runs past midnight
         DateTime addDay = today;
         int addAnchorIdx = 0;
         var addExtras = new List<Border>(); // highlight pieces on the other days of a multi-day draw
@@ -2599,6 +2600,34 @@ public partial class TimesheetWindow : Window
                     SyncPieces(d.Neighbor.Id, span.Item1, span.Item2, d.NeighborElement);
                 }
             }
+
+            // Preview the part of the dragged span that falls on other days (a block pulled past
+            // midnight has no rendered piece there yet).
+            foreach (var g in dragGhosts) canvas.Children.Remove(g);
+            dragGhosts.Clear();
+            var (gs, ge) = DragSpan(d, e.GetPosition(canvas).Y);
+            var elementDay = d.IsResize ? d.Day : d.CurrentDay;
+            var lastGhostDay = ge.TimeOfDay == TimeSpan.Zero ? ge.Date.AddDays(-1) : ge.Date;
+            for (var gd = gs.Date; gd <= lastGhostDay; gd = gd.AddDays(1))
+            {
+                int gi = days.IndexOf(gd);
+                if (gi < 0 || gd == elementDay) continue;
+                if (rowElements.TryGetValue(rowId, out var existing) && existing.Any(x => x.Day == gd)) continue;
+                var ps = gs > gd ? gs : gd;
+                var pe = ge < gd.AddDays(1) ? ge : gd.AddDays(1);
+                var ghost = new Border
+                {
+                    Width = barW, Background = d.Element.Background, CornerRadius = new CornerRadius(4),
+                    Opacity = 0.85, IsHitTestVisible = false,
+                };
+                double gTop = MinutesToY((ps - gd).TotalMinutes), gBot = MinutesToY((pe - gd).TotalMinutes);
+                Canvas.SetLeft(ghost, yAxisW + dayW * gi + geom.HoursCx - barW / 2);
+                Canvas.SetTop(ghost, gTop);
+                ghost.Height = Math.Max(2, gBot - gTop);
+                Canvas.SetZIndex(ghost, 500);
+                canvas.Children.Add(ghost);
+                dragGhosts.Add(ghost);
+            }
         };
 
         canvas.MouseLeftButtonUp += (_, e) =>
@@ -2626,6 +2655,8 @@ public partial class TimesheetWindow : Window
                 return;
             }
 
+            foreach (var g in dragGhosts) canvas.Children.Remove(g);
+            dragGhosts.Clear();
             if (_drag is not { } d) { canvas.ReleaseMouseCapture(); return; }
             canvas.ReleaseMouseCapture();
 
