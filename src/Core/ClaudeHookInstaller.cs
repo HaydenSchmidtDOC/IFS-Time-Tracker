@@ -11,6 +11,30 @@ public static class ClaudeHookInstaller
     public static string DefaultSettingsPath()
         => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "settings.json");
 
+    /// <summary>Every Claude Code config dir's settings.json: the default ~/.claude, a CLAUDE_CONFIG_DIR
+    /// if set, and sibling profile dirs like ~/.claude-work (launched with CLAUDE_CONFIG_DIR, so they
+    /// ignore ~/.claude/settings.json and would otherwise never report their sessions).</summary>
+    public static List<string> DiscoverSettingsPaths()
+    {
+        var paths = new List<string> { DefaultSettingsPath() };
+        void Add(string dir)
+        {
+            var p = Path.Combine(dir, "settings.json");
+            if (!paths.Contains(p, StringComparer.OrdinalIgnoreCase)) paths.Add(p);
+        }
+        var env = Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR");
+        if (!string.IsNullOrWhiteSpace(env)) Add(env);
+        try
+        {
+            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            foreach (var dir in Directory.EnumerateDirectories(home, ".claude-*"))
+                if (File.Exists(Path.Combine(dir, "settings.json")) || Directory.Exists(Path.Combine(dir, "projects")))
+                    Add(dir);
+        }
+        catch { /* unreadable profile folder: default path still covered */ }
+        return paths;
+    }
+
     public static string ScriptText(string pipeName = AiPipeServer.DefaultPipeName) => $$"""
 param([string]$Mode = 'start', [string]$Chain = '')
 $ErrorActionPreference = 'SilentlyContinue'
@@ -55,7 +79,20 @@ if ($Mode -eq 'status' -and $Chain) { $raw | & cmd.exe /c $Chain }
     /// command (if one wasn't ours) so the caller can store it as the chained command.</summary>
     public static string? Install(AppPaths paths, string? settingsPath = null, string? chain = null)
     {
-        settingsPath ??= DefaultSettingsPath();
+        if (settingsPath is not null) return InstallOne(paths, settingsPath, chain);
+        string? previous = null;
+        foreach (var path in DiscoverSettingsPaths())
+        {
+            // The stored chain belongs to the default profile; other profiles chain only their own.
+            var isDefault = string.Equals(path, DefaultSettingsPath(), StringComparison.OrdinalIgnoreCase);
+            var prev = InstallOne(paths, path, isDefault ? chain : null);
+            if (isDefault) previous = prev;
+        }
+        return previous;
+    }
+
+    private static string? InstallOne(AppPaths paths, string settingsPath, string? chain)
+    {
         WriteScript(paths);
         var root = ReadRoot(settingsPath);
         Backup(settingsPath);
@@ -88,7 +125,13 @@ if ($Mode -eq 'status' -and $Chain) { $raw | & cmd.exe /c $Chain }
     /// <summary>Removes our hook and statusline; restores <paramref name="restoreStatusLine"/> if given.</summary>
     public static void Remove(string? settingsPath = null, string? restoreStatusLine = null)
     {
-        settingsPath ??= DefaultSettingsPath();
+        if (settingsPath is not null) { RemoveOne(settingsPath, restoreStatusLine); return; }
+        foreach (var path in DiscoverSettingsPaths())
+            RemoveOne(path, string.Equals(path, DefaultSettingsPath(), StringComparison.OrdinalIgnoreCase) ? restoreStatusLine : null);
+    }
+
+    private static void RemoveOne(string settingsPath, string? restoreStatusLine)
+    {
         if (!File.Exists(settingsPath)) return;
         var root = ReadRoot(settingsPath);
         Backup(settingsPath);
