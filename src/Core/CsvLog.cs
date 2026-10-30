@@ -39,22 +39,24 @@ public sealed class CsvLog
         Invalidate(file);
         using var w = new StreamWriter(file, append: true);
         if (isNew) w.WriteLine(Csv.Line(Header));
-        w.WriteLine(Csv.Line(new[]
-        {
-            b.StartLocal.ToString("yyyy-MM-dd", Inv),
-            b.ProjectCode,
-            b.Asn,
-            b.ProjectName,
-            b.StartLocal.ToString("yyyy-MM-dd HH:mm:ss", Inv),
-            b.EndLocal.ToString("yyyy-MM-dd HH:mm:ss", Inv),
-            b.DurationSeconds.ToString(Inv),
-            b.DurationHours.ToString("0.0", Inv),
-            b.Notes,
-            b.ProjectId,
-            b.Id,
-            b.Unscheduled ? "1" : "0",
-        }));
+        w.WriteLine(RowFor(b));
     }
+
+    private static string RowFor(TimeBlock b) => Csv.Line(new[]
+    {
+        b.StartLocal.ToString("yyyy-MM-dd", Inv),
+        b.ProjectCode,
+        b.Asn,
+        b.ProjectName,
+        b.StartLocal.ToString("yyyy-MM-dd HH:mm:ss", Inv),
+        b.EndLocal.ToString("yyyy-MM-dd HH:mm:ss", Inv),
+        b.DurationSeconds.ToString(Inv),
+        b.DurationHours.ToString("0.0", Inv),
+        b.Notes,
+        b.ProjectId,
+        b.Id,
+        b.Unscheduled ? "1" : "0",
+    });
 
     /// <summary>Parsed month files, keyed by path and stamped with the file's last-write time and
     /// length. The UI asks for today's blocks every second, but this app is the only writer, so
@@ -84,12 +86,72 @@ public sealed class CsvLog
         {
             if (!_monthCache.TryGetValue(file, out var hit) || hit.Stamp != info.LastWriteTimeUtc || hit.Length != info.Length)
             {
-                hit = (info.LastWriteTimeUtc, info.Length, ParseMonth(file));
+                var blocks = ParseMonth(file);
+                if (blocks.Any(CrossesMidnight))
+                {
+                    SplitMidnightRows(file);
+                    info = new FileInfo(file);
+                    blocks = ParseMonth(file);
+                }
+                hit = (info.LastWriteTimeUtc, info.Length, blocks);
                 _monthCache[file] = hit;
             }
             // Copies, so a caller editing a block can never corrupt the cache.
             return hit.Blocks.Select(Copy).ToList();
         }
+    }
+
+    /// <summary>True for a block that runs past the end of its start day (ending exactly at 00:00
+    /// the next day is fine — it doesn't touch the new day).</summary>
+    private static bool CrossesMidnight(TimeBlock b) => b.EndLocal > b.StartLocal.Date.AddDays(1);
+
+    /// <summary>One-time migration of rows written before the tracker split blocks at midnight: each
+    /// midnight-crossing row is cut into one row per day (first part keeps the original id, all keep
+    /// project, flags and note) so per-day totals, the calendar and the editor see ordinary
+    /// single-day blocks. Parts landing in a later month go to that month's file. The files touched
+    /// are backed up once as *.pre-split.bak. Idempotent: afterwards nothing crosses midnight.</summary>
+    private void SplitMidnightRows(string file)
+    {
+        BackupOnce(file);
+        var lines = File.ReadAllLines(file).ToList();
+        var output = new List<string>(lines.Count) { };
+        var elsewhere = new List<TimeBlock>();
+
+        for (int i = 0; i < lines.Count; i++)
+        {
+            var f = i == 0 || string.IsNullOrWhiteSpace(lines[i]) ? null : Csv.ParseLine(lines[i]);
+            if (f is null || f.Count < LegacyColumnCount) { output.Add(lines[i]); continue; }
+
+            var start = ParseDate(f[4]); var end = ParseDate(f[5]);
+            if (end <= start.Date.AddDays(1)) { output.Add(lines[i]); continue; }
+
+            bool first = true;
+            for (var segStart = start; segStart < end; segStart = segStart.Date.AddDays(1))
+            {
+                var segEnd = segStart.Date.AddDays(1) < end ? segStart.Date.AddDays(1) : end;
+                var seg = new TimeBlock
+                {
+                    Id = first ? (f.Count > 10 && !string.IsNullOrEmpty(f[10]) ? f[10] : NewId()) : NewId(),
+                    ProjectId = f.Count > 9 ? f[9] : "", ProjectCode = f[1], Asn = f[2], ProjectName = f[3],
+                    StartLocal = segStart, EndLocal = segEnd,
+                    DurationSeconds = (long)(segEnd - segStart).TotalSeconds,
+                    Notes = f[8], Unscheduled = f.Count > 11 && f[11] == "1",
+                };
+                first = false;
+                if (_paths.LogFileFor(segStart) == file) output.Add(RowFor(seg)); else elsewhere.Add(seg);
+            }
+        }
+
+        // Later-month parts first: a crash in between then leaves duplicates (recoverable), not a loss.
+        foreach (var seg in elsewhere) { BackupOnce(_paths.LogFileFor(seg.StartLocal)); Append(seg); }
+        File.WriteAllLines(file, output);
+        Invalidate(file);
+    }
+
+    private static void BackupOnce(string file)
+    {
+        var bak = file + ".pre-split.bak";
+        if (File.Exists(file) && !File.Exists(bak)) File.Copy(file, bak);
     }
 
     private static List<TimeBlock> ParseMonth(string file)

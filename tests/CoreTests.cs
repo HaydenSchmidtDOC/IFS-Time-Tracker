@@ -343,6 +343,54 @@ public class CsvTests
     }
 }
 
+public class MidnightMigrationTests : IDisposable
+{
+    private readonly string _dir;
+    private readonly AppPaths _paths;
+    private readonly CsvLog _log;
+
+    public MidnightMigrationTests()
+    {
+        _dir = Path.Combine(Path.GetTempPath(), "tt-tests-" + Guid.NewGuid().ToString("N"));
+        _paths = new AppPaths(_dir);
+        _log = new CsvLog(_paths);
+    }
+
+    public void Dispose() { try { Directory.Delete(_dir, true); } catch { } }
+
+    private static TimeBlock B(DateTime s, DateTime e, string note = "n") => new()
+    {
+        ProjectCode = "P", ProjectName = "P", Asn = "1", ProjectId = "pid", StartLocal = s, EndLocal = e,
+        DurationSeconds = (long)(e - s).TotalSeconds, Notes = note,
+    };
+
+    [Fact]
+    public void OldMidnightCrossingRow_IsSplitPerDay_WithBackup_AndIdempotent()
+    {
+        _log.Append(B(new DateTime(2026, 7, 21, 22, 0, 0), new DateTime(2026, 7, 23, 1, 0, 0), "late"));
+        _log.Append(B(new DateTime(2026, 7, 24, 9, 0, 0), new DateTime(2026, 7, 24, 10, 0, 0)));
+        // append bypasses ReadMonth, so the file is still the old style until it's read
+        var blocks = _log.ReadMonth(2026, 7).OrderBy(b => b.StartLocal).ToList();
+
+        Assert.Equal(4, blocks.Count);
+        Assert.Equal(new[] { 7200L, 86400L, 3600L, 3600L }, blocks.Select(b => b.DurationSeconds).ToArray());
+        Assert.All(blocks.Take(3), b => Assert.Equal("late", b.Notes));
+        Assert.All(blocks, b => Assert.True(b.EndLocal <= b.StartLocal.Date.AddDays(1)));
+        Assert.True(File.Exists(_paths.LogFileFor(new DateTime(2026, 7, 1)) + ".pre-split.bak"));
+        Assert.Equal(4, new CsvLog(_paths).ReadMonth(2026, 7).Count); // re-read: no further change
+    }
+
+    [Fact]
+    public void CrossingMonthEnd_MovesSecondPartIntoNextMonthFile()
+    {
+        _log.Append(B(new DateTime(2026, 7, 31, 23, 0, 0), new DateTime(2026, 8, 1, 2, 0, 0)));
+        var july = _log.ReadMonth(2026, 7);
+        var august = _log.ReadMonth(2026, 8);
+        Assert.Equal(3600, Assert.Single(july).DurationSeconds);
+        Assert.Equal(7200, Assert.Single(august).DurationSeconds);
+    }
+}
+
 public class CsvLogCacheTests : IDisposable
 {
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "tt-cache-tests-" + Guid.NewGuid().ToString("N"));
