@@ -33,6 +33,7 @@ public partial class TimesheetWindow : Window
     /// whichever view was last used rather than a fixed, separately-configured default.</summary>
     private enum ViewMode { Bar, Calendar, Project }
     private ViewMode _viewMode;
+    private bool _hoveringSegment; // mouse is over a stacked-bar segment (tooltip may be showing)
     private DateTime _monthStart; // first of the displayed month, Project view only
     private double _projectScrollOffset; // Project view's horizontal scroll, kept across rebuilds
 
@@ -299,6 +300,10 @@ public partial class TimesheetWindow : Window
             if (today < _monthStart || today >= _monthStart.AddMonths(1)) return;
         }
         else if (today < _weekStart || today >= _weekStart.AddDays(7)) return;
+
+        // The totals views rebuild their bars each second; doing that under the cursor would dismiss
+        // the segment's tooltip before it can be read, so hold the rebuild while one is hovered.
+        if (_viewMode != ViewMode.Calendar && _hoveringSegment) return;
 
         if (TryUpdateLiveCalendarInPlace(out double weekTotalHours))
         {
@@ -805,6 +810,7 @@ public partial class TimesheetWindow : Window
     private void RenderCurrentWeek(int slideDirection, bool crossFade = false)
     {
         StopBreathing();
+        _hoveringSegment = false; // the old segments are about to be replaced; a new one re-raises it on MouseEnter
         if (_viewMode == ViewMode.Project)
         {
             RenderCurrentMonth(slideDirection, crossFade);
@@ -1267,6 +1273,8 @@ public partial class TimesheetWindow : Window
             ToolTip = seg0.Tooltip,
             ClipToBounds = true,
         };
+        seg.MouseEnter += (_, _) => _hoveringSegment = true;
+        seg.MouseLeave += (_, _) => _hoveringSegment = false;
         // A border (not text) is the primary "live" cue since it reads even on a 2px sliver; it's
         // a brighter tint of the segment's own colour rather than the unrelated red "Live" accent.
         if (seg0.IsLive)
