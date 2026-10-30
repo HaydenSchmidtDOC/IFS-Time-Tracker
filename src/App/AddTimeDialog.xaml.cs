@@ -165,6 +165,14 @@ public partial class AddTimeDialog : Window
     /// drag-to-add gesture, where the dragged span (already clipped clear of any block it only
     /// partially overlaps — see ClipDragToEdges) is the whole point, not something to
     /// second-guess with a computed default. Returns true if a block was added.</summary>
+    public static bool AskAtTime(Window owner, DateTime start, DateTime end)
+    {
+        // A drawn span can run across midnight into later days; the end is shown as "HH:mm +Nd".
+        var d = new AddTimeDialog(start.Date, initialMode: 1, start.TimeOfDay, end - start.Date) { Owner = owner };
+        d.ShowDialog();
+        return d.Commit();
+    }
+
     public static bool AskAtTime(Window owner, DateTime day, TimeSpan start, TimeSpan end)
     {
         var d = new AddTimeDialog(day, initialMode: 1, start, end) { Owner = owner };
@@ -482,9 +490,17 @@ public partial class AddTimeDialog : Window
     /// brushing two separate blocks (one near each end) resolves against both.</summary>
     public static (TimeSpan Start, TimeSpan End) ClipDragToEdges(DateTime day, TimeSpan start, TimeSpan end)
     {
-        var startDt = day + start;
-        var endDt = day + end;
-        foreach (var (rs, re) in OccupiedRangesFor(day, null))
+        var (s, e) = ClipSpanToEdges(day + start, day + end);
+        return (s - day, e - day);
+    }
+
+    /// <summary>Same as <see cref="ClipDragToEdges"/> for a span that may cross midnight.</summary>
+    public static (DateTime Start, DateTime End) ClipSpanToEdges(DateTime start, DateTime end)
+    {
+        var startDt = start;
+        var endDt = end;
+        var lastDay = end.TimeOfDay == TimeSpan.Zero ? end.Date.AddDays(-1) : end.Date;
+        foreach (var (rs, re) in OccupiedRangesFor(start.Date, null, lastDay < start.Date ? start.Date : lastDay))
         {
             bool overlaps = startDt < re && endDt > rs;
             if (!overlaps) continue;
@@ -493,7 +509,7 @@ public partial class AddTimeDialog : Window
             if (startDt >= rs && startDt < re) startDt = re;
             if (endDt > rs && endDt <= re) endDt = rs;
         }
-        return (startDt - day, endDt - day);
+        return (startDt, endDt);
     }
 
     /// <summary>Validates the typed Times-mode span and, if valid, returns the actual segment(s)
@@ -509,9 +525,8 @@ public partial class AddTimeDialog : Window
         segments = new();
         if (!TimeSpan.TryParse(StartTimeBox.Text, CultureInfo.InvariantCulture, out var ts) || ts < TimeSpan.Zero || ts >= TimeSpan.FromHours(24))
         { error = "Enter a valid start time, e.g. 09:00."; return false; }
-        if (!TryParseEnd(EndTimeBox.Text, out var te) || te <= TimeSpan.Zero
-            || (_editingBlock is null && (te > TimeSpan.FromHours(24))))
-        { error = _editingBlock is null ? "Enter a valid end time, e.g. 17:30." : "Enter a valid end time, e.g. 17:30 or 01:30 +1d."; return false; }
+        if (!TryParseEnd(EndTimeBox.Text, out var te) || te <= TimeSpan.Zero)
+        { error = "Enter a valid end time, e.g. 17:30 or 01:30 +1d."; return false; }
 
         start = _day + ts;
         end = _day + te;

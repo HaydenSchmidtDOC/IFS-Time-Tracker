@@ -2133,6 +2133,60 @@ public partial class TimesheetWindow : Window
         TextBlock? addLabel = null;
         double addAnchorY = 0;
         DateTime addDay = today;
+        int addAnchorIdx = 0;
+        var addExtras = new List<Border>(); // highlight pieces on the other days of a multi-day draw
+
+        // The span being drawn, from the press point to the current mouse position (which may be
+        // on another day column, earlier or later), each end snapped to the drag grid.
+        (DateTime Start, DateTime End, int CurIdx) AddSpan(Point mouse)
+        {
+            int snap = Math.Max(1, A.Settings.DragSnapMinutes);
+            int curIdx = Math.Clamp((int)((mouse.X - yAxisW) / dayW), 0, days.Count - 1);
+            var a = addDay.AddMinutes(Clamp(SnapTo(YToMinutes(addAnchorY), snap), 0, 24 * 60));
+            var c = days[curIdx].AddMinutes(Clamp(SnapTo(YToMinutes(Clamp(mouse.Y, 0, gridHeight)), snap), 0, 24 * 60));
+            var st = a < c ? a : c;
+            var en = a < c ? c : a;
+            if (en <= st)
+            {
+                en = st.AddMinutes(snap);
+                var cap = days[days.Count - 1].AddDays(1);
+                if (en > cap) { en = cap; st = en.AddMinutes(-snap); }
+            }
+            return (st, en, curIdx);
+        }
+
+        void UpdateAddPieces(DateTime st, DateTime en)
+        {
+            if (addHighlight is null) return;
+            foreach (var x in addExtras) canvas.Children.Remove(x);
+            addExtras.Clear();
+            var lastDay = en.TimeOfDay == TimeSpan.Zero ? en.Date.AddDays(-1) : en.Date;
+            for (var dd = st.Date; dd <= lastDay; dd = dd.AddDays(1))
+            {
+                int idx = days.IndexOf(dd);
+                if (idx < 0) continue;
+                var ps = st > dd ? st : dd;
+                var pe = en < dd.AddDays(1) ? en : dd.AddDays(1);
+                Border piece;
+                if (dd == addDay) piece = addHighlight;
+                else
+                {
+                    piece = new Border
+                    {
+                        Width = barW, Background = addHighlight.Background, BorderBrush = addHighlight.BorderBrush,
+                        BorderThickness = addHighlight.BorderThickness, CornerRadius = addHighlight.CornerRadius,
+                        IsHitTestVisible = false,
+                    };
+                    Canvas.SetZIndex(piece, 500);
+                    canvas.Children.Add(piece);
+                    addExtras.Add(piece);
+                }
+                double pTop = MinutesToY((ps - dd).TotalMinutes), pBot = MinutesToY((pe - dd).TotalMinutes);
+                Canvas.SetLeft(piece, yAxisW + dayW * idx + geom.HoursCx - barW / 2);
+                Canvas.SetTop(piece, pTop);
+                piece.Height = Math.Max(1, pBot - pTop);
+            }
+        }
 
         // Snaps both edges to the configured drag-snap grid (same one block-resize/move uses),
         // then guarantees a non-zero span by nudging the end forward a step if it ever rounds
@@ -2223,6 +2277,32 @@ public partial class TimesheetWindow : Window
             return (topMoved || botMoved,
                 topMoved ? d.Day + TimeSpan.FromMinutes(YToMinutes(nTop)) : nRow.StartLocal,
                 botMoved ? d.Day + TimeSpan.FromMinutes(YToMinutes(nTop + nHeight)) : nRow.EndLocal);
+        }
+
+        // A dropped bar may run into a midnight-crossing row and push its edge (the crossing row
+        // shrinks, carrying the change across midnight); any other overlap is still refused.
+        // Returns false if the drop can't be made to fit; `pushes` gets the rows to rewrite.
+        bool TryPlanMovePushes(TimeBlock self, DateTime newStart, DateTime newEnd,
+            List<(TimeBlock Row, DateTime Start, DateTime End)> pushes)
+        {
+            var selfId = (self.Whole ?? self).Id;
+            var lastDay = newEnd.TimeOfDay == TimeSpan.Zero ? newEnd.Date.AddDays(-1) : newEnd.Date;
+            foreach (var o in A.Log.ReadRange(newStart.Date, lastDay < newStart.Date ? newStart.Date : lastDay))
+            {
+                if (o.Unscheduled || o.Id == selfId) continue;
+                if (!(newStart < o.EndLocal && newEnd > o.StartLocal)) continue;
+                var w = o.Whole;
+                if (w is null) return false; // an ordinary single-day block — no pushing
+                if (pushes.Any(x => x.Row.Id == w.Id)) continue;
+                DateTime ns = w.StartLocal, ne = w.EndLocal;
+                if (newStart <= w.StartLocal && newEnd < w.EndLocal) ns = newEnd;
+                else if (newStart > w.StartLocal && newEnd >= w.EndLocal) ne = newStart;
+                else return false; // swallows it whole, or lands strictly inside it
+                if (ne <= ns || ns.Year != w.StartLocal.Year || ns.Month != w.StartLocal.Month) return false;
+                pushes.Add((w, ns, ne));
+            }
+            return !(liveBlock is not null && !ReferenceEquals(self, liveBlock)
+                && newStart < liveBlock.EndLocal && newEnd > liveBlock.StartLocal);
         }
 
         void BeginResize(MouseButtonEventArgs e, Border grip, bool top, TimeBlock block, Border element,
@@ -2323,19 +2403,8 @@ public partial class TimesheetWindow : Window
         {
             if (_addDragging && addHighlight is not null)
             {
-                double curY = Clamp(e.GetPosition(canvas).Y, 0, gridHeight);
-                double rawTop = Math.Min(addAnchorY, curY);
-                double rawBottom = Math.Max(addAnchorY, curY);
-
-                // Snap the RECTANGLE itself to the same grid the preview time text already
-                // reflects — previously only the label snapped while the box tracked the raw
-                // pixel position, so the two visibly disagreed (box looked continuous, times
-                // jumped). Mirrors how the resize/move handlers snap their own live geometry.
-                var (previewStart, previewEnd) = SnappedAddRange(rawTop, rawBottom);
-                double snappedTop = MinutesToY(previewStart.TotalMinutes);
-                double snappedBottom = MinutesToY(previewEnd.TotalMinutes);
-                Canvas.SetTop(addHighlight, snappedTop);
-                addHighlight.Height = Math.Max(1, snappedBottom - snappedTop);
+                var (previewStart, previewEnd, _) = AddSpan(e.GetPosition(canvas));
+                UpdateAddPieces(previewStart, previewEnd);
 
                 if (addLabel is not null)
                 {
@@ -2343,7 +2412,10 @@ public partial class TimesheetWindow : Window
                     // room for it — same "don't cram a second piece of info onto a sliver"
                     // reasoning BuildChart/BuildCalendar's own block labels already follow
                     // (compare their own ASN/time second-line thresholds).
-                    string timeText = $"{addDay + previewStart:HH:mm}–{addDay + previewEnd:HH:mm}";
+                    bool multiDay = previewEnd > previewStart.Date.AddDays(1);
+                    string timeText = multiDay
+                        ? $"{previewStart:ddd HH:mm}–{previewEnd:ddd HH:mm}"
+                        : $"{previewStart:HH:mm}–{previewEnd:HH:mm}";
                     const double HoursLabelMinHeight = 34; // needs room for a second line, not just wider text
                     addLabel.Text = addHighlight.Height >= HoursLabelMinHeight
                         ? $"{timeText}\n{(previewEnd - previewStart).TotalHours:0.0}h"
@@ -2463,18 +2535,20 @@ public partial class TimesheetWindow : Window
                 canvas.ReleaseMouseCapture();
                 _addDragging = false;
                 if (addHighlight is not null) canvas.Children.Remove(addHighlight);
+                foreach (var x in addExtras) canvas.Children.Remove(x);
+                addExtras.Clear();
 
                 // A near-zero-movement press/release is a stray click, not a drag — same
                 // click-vs-drag distinction the block-move handler below makes for itself.
                 const double AddClickThresholdPx = 3;
+                var (rangeStart, rangeEnd, releaseIdx) = AddSpan(e.GetPosition(canvas));
                 double releaseY = Clamp(e.GetPosition(canvas).Y, 0, gridHeight);
-                if (Math.Abs(releaseY - addAnchorY) < AddClickThresholdPx) return;
+                if (releaseIdx == addAnchorIdx && Math.Abs(releaseY - addAnchorY) < AddClickThresholdPx) return;
 
-                var (rangeStart, rangeEnd) = SnappedAddRange(Math.Min(addAnchorY, releaseY), Math.Max(addAnchorY, releaseY));
-                var (clippedStart, clippedEnd) = AddTimeDialog.ClipDragToEdges(addDay, rangeStart, rangeEnd);
+                var (clippedStart, clippedEnd) = AddTimeDialog.ClipSpanToEdges(rangeStart, rangeEnd);
                 if (clippedEnd <= clippedStart) return; // fully swallowed by one existing block — nothing left to add
 
-                bool added = ShowTimeDialog(() => AddTimeDialog.AskAtTime(this, addDay, clippedStart, clippedEnd));
+                bool added = ShowTimeDialog(() => AddTimeDialog.AskAtTime(this, clippedStart, clippedEnd));
                 if (added) { _cachedWeekStart = null; RenderCurrentWeek(0); }
                 return;
             }
@@ -2511,14 +2585,19 @@ public partial class TimesheetWindow : Window
                 || (neighborNewEnd > neighborNewStart
                     && neighborNewStart!.Value.Year == nRow!.StartLocal.Year && neighborNewStart.Value.Month == nRow.StartLocal.Month);
 
+            var movePushes = new List<(TimeBlock Row, DateTime Start, DateTime End)>();
             bool ok = !crossMonth && newEnd > newStart && neighborOkSpan
-                && !OverlapsAnyOtherBlock(newStart, newEnd, d.Block, d.Neighbor)
+                && (d.IsResize
+                    ? !OverlapsAnyOtherBlock(newStart, newEnd, d.Block, d.Neighbor)
+                    : TryPlanMovePushes(d.Block, newStart, newEnd, movePushes))
                 && (!neighborChanged || !OverlapsAnyOtherBlock(neighborNewStart!.Value, neighborNewEnd!.Value, d.Neighbor!, d.Block));
 
             if (ok)
             {
                 var updated = new TimeBlock { StartLocal = newStart, EndLocal = newEnd, Notes = row.Notes, Unscheduled = row.Unscheduled };
                 A.Log.UpdateBlock(d.Block, updated);
+                foreach (var (pRow, pStart, pEnd) in movePushes)
+                    A.Log.UpdateBlock(pRow, new TimeBlock { StartLocal = pStart, EndLocal = pEnd, Notes = pRow.Notes, Unscheduled = pRow.Unscheduled });
 
                 // Only touch the neighbour's row if it was actually pushed — never encroaching
                 // on it (e.g. dragging away the whole time) means its row is already correct as
@@ -2579,6 +2658,7 @@ public partial class TimesheetWindow : Window
             _addDragging = true;
             addDay = clickedDay;
             addAnchorY = pos.Y;
+            addAnchorIdx = dayIndex;
 
             double cxForAdd = yAxisW + dayW * dayIndex + geom.HoursCx;
             addLabel = new TextBlock
