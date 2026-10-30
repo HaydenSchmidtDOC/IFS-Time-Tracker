@@ -1970,6 +1970,26 @@ public partial class TimesheetWindow : Window
                 element.MouseLeftButtonDown += (_, e) => BeginMove(e, capturedElement, capturedBlock, capturedDay);
             }
 
+            // Blocks that can't be dragged (a session split at midnight, or one spanning it) still open
+            // the editor on a plain click; the press is swallowed so it doesn't start a drag-to-add.
+            foreach (var (b, element) in allDayBlockElements)
+            {
+                if (ReferenceEquals(b, liveBlock) || draggableDayBlockElements.Any(x => ReferenceEquals(x.Element, element))) continue;
+                var capturedBlock = b;
+                bool pressed = false;
+                element.Cursor = Cursors.Hand;
+                element.MouseLeftButtonDown += (_, e) => { pressed = true; e.Handled = true; };
+                element.MouseLeftButtonUp += (_, e) =>
+                {
+                    if (!pressed) return;
+                    pressed = false;
+                    e.Handled = true;
+                    bool changed = ShowTimeDialog(() => AddTimeDialog.AskEdit(this, capturedBlock));
+                    if (changed) _cachedWeekStart = null;
+                    RenderCurrentWeek(0);
+                };
+            }
+
             var labelStack = new StackPanel
             {
                 Width = dayW, Cursor = System.Windows.Input.Cursors.Hand,
