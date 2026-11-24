@@ -127,6 +127,7 @@ public partial class SwitcherWindow : Window
             _closing = true;
             Close();
             A.AiSessions.Assign(_pickFor.Provider, _pickFor.SessionId, picked);
+            if (picked is not null) A.RememberAiDirectory(_pickFor, picked);
             return;
         }
         if (_rows.Count == 0) { Close(); return; }

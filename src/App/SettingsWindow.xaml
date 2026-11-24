@@ -158,6 +158,17 @@
                     </Grid>
                     <TextBlock Text="Shows session cost in the main window and a coding-session lane in the timesheets."
                                FontSize="11" Foreground="{DynamicResource TextFaint}" Margin="0,0,0,10" TextWrapping="Wrap"/>
+                    <Grid Margin="0,0,0,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="Remember directory" FontSize="13"
+                                   Foreground="{DynamicResource Text}" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                        <ContentControl Grid.Column="1" x:Name="AiRememberToggleHost" Focusable="False" VerticalAlignment="Center"/>
+                    </Grid>
+                    <TextBlock Text="New sessions started in a directory you've already assigned go straight to that project, without asking."
+                               FontSize="11" Foreground="{DynamicResource TextFaint}" Margin="0,0,0,10" TextWrapping="Wrap"/>
                     <TextBlock Text="ENDPOINTS TO TRACK" Style="{StaticResource EyebrowText}" Margin="0,0,0,4"/>
                     <StackPanel x:Name="AiEndpointsPanel" Margin="0,0,0,10"/>
                     <TextBlock Text="ENDPOINT OVERRIDES (host=Class, one per line)" Style="{StaticResource EyebrowText}" Margin="0,0,0,4"/>

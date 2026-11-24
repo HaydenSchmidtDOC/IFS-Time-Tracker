@@ -201,4 +201,12 @@ public sealed class Settings
     /// <summary>An existing statusline command to keep running; the cost reporter passes the
     /// statusline JSON through to it and prints its output.</summary>
     public string? AiChainedStatusLine { get; set; }
+
+    /// <summary>When on, the project picked for a new AI session is remembered against its working
+    /// directory (<see cref="AiDirectoryProjects"/>) and later sessions there skip the picker.</summary>
+    public bool AiRememberDirectory { get; set; } = true;
+
+    /// <summary>Normalised working directory (see <c>App.AiDirKey</c>) -> project Id. Kept while the
+    /// setting is off, just not read or written.</summary>
+    public Dictionary<string, string> AiDirectoryProjects { get; set; } = new();
 }

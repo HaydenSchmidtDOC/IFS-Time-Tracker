@@ -560,10 +560,31 @@ public partial class App : Application
         if (!Settings.PromptForNote) InfoPrompt.Show("Session ended", CollisionMessage(collision, ended: true));
     }
 
+    public static string AiDirKey(string? cwd) => (cwd ?? "").Trim().TrimEnd('\\', '/').ToLowerInvariant();
+
+    /// <summary>Remember the picked project for this session's directory (no-op when the setting is off).</summary>
+    public void RememberAiDirectory(AiSession s, Project p)
+    {
+        var key = AiDirKey(s.Cwd);
+        if (!Settings.AiRememberDirectory || key.Length == 0) return;
+        Settings.AiDirectoryProjects[key] = p.Id;
+        Store.SaveSettings(Settings);
+    }
+
     private void ShowNextAiPick()
     {
         if (_aiPicker is not null || _aiPickQueue.Count == 0) return;
         var s = _aiPickQueue.Dequeue();
+        // A remembered directory pointing at a still-enabled project skips the picker entirely;
+        // a missing/disabled one falls through to the picker, whose answer overwrites the entry.
+        if (Settings.AiRememberDirectory
+            && Settings.AiDirectoryProjects.TryGetValue(AiDirKey(s.Cwd), out var pid)
+            && Tracker.Projects.FirstOrDefault(p => p.Id == pid && p.Enabled) is { } saved)
+        {
+            AiSessions.Assign(s.Provider, s.SessionId, saved);
+            ShowNextAiPick();
+            return;
+        }
         // Blur the terminal the session started in (the foreground window right now — the
         // previous picker, if any, has already handed focus back to it). Shown once the picker has
         // drawn, so the picker appears first. Clicking the blur is the same as Esc: unassigned.

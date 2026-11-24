@@ -118,6 +118,10 @@ public partial class SettingsWindow : Window
         enabled.Toggled += on => A.SetAiTrackingEnabled(on);
         AiEnabledToggleHost.Content = enabled.Root;
 
+        var remember = new ToggleSwitch(s.AiRememberDirectory);
+        remember.Toggled += on => { A.Settings.AiRememberDirectory = on; A.Store.SaveSettings(A.Settings); };
+        AiRememberToggleHost.Content = remember.Root;
+
         foreach (var cls in Enum.GetNames<EndpointClass>())
         {
             var cb = new CheckBox

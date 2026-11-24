@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.0] Beta — 2026-11-24
+
+### New
+
+- **Remember directory for AI sessions.** The project you pick for a new Claude Code session is saved
+  against its working directory. Next time a session starts there, it's assigned straight away with no
+  prompt. If the saved project has since been disabled, you're asked again and the answer replaces it.
+  On by default; turn it off under Settings → AI usage (nothing is read or saved while off).
+
 ## [0.7.2] Beta — 2026-10-30
 
 ### New
